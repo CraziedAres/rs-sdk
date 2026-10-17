@@ -38,6 +38,9 @@ import type {
     FletchResult,
     CraftLeatherResult,
     SmithResult,
+    SetCombatStyleResult,
+    CombatStyleTarget,
+    CombatStyleOption,
     OpenBankResult,
     BankDepositResult,
     BankWithdrawResult,
@@ -2911,6 +2914,75 @@ export class BotActions {
             : this.attackNpcEntity(entity, timeout);
     }
 
+    /**
+     * Select a combat style and wait until the server has applied it.
+     *
+     * Takes a style index, or the skill to train: `{ trains: 'Strength' }` picks the
+     * style that trains only Strength (aggressive), falling back to one that trains it
+     * among others (controlled) when the weapon has no such style. Indices depend on the
+     * weapon (index 2 is aggressive on a stabsword but controlled on a scimitar), so the
+     * skill form is resolved from `state.combatStyle.styles`, never assumed.
+     *
+     * ```ts
+     * const result = await bot.setCombatStyle({ trains: 'Defence' });
+     * if (!result.success) console.log(result.reason, result.message);
+     * ```
+     *
+     * Confirmation is `state.combatStyle.currentStyle` (varp 43, com_mode) reaching the
+     * index. The server ignores the click while the player is busy and only resyncs the
+     * varp, so a click that changed nothing comes back as `reason: 'not_applied'`.
+     * com_mode is not saved: it is back to 0 after every login, so set it again then.
+     * com_mode reads 0 until the server sends it, so an index-0 request is always clicked
+     * rather than trusted as already selected.
+     */
+    async setCombatStyle(target: CombatStyleTarget, timeout: number = 3000): Promise<SetCombatStyleResult> {
+        await this.dismissBlockingUI();
+
+        const combatStyle = this.sdk.getState()?.combatStyle;
+        if (!combatStyle || combatStyle.styles.length === 0) {
+            return { success: false, message: 'No combat style state published yet', reason: 'no_combat_style_state' };
+        }
+
+        let style: CombatStyleOption | undefined;
+        if (typeof target === 'number') {
+            style = combatStyle.styles.find(s => s.index === target);
+        } else {
+            // Exactly the skill first (aggressive trains Strength alone), then any style that includes it.
+            style = combatStyle.styles.find(s => s.trainsSkills.length === 1 && s.trainsSkills[0] === target.trains)
+                ?? combatStyle.styles.find(s => s.trainsSkills.includes(target.trains));
+        }
+        if (!style) {
+            const wanted = typeof target === 'number' ? `index ${target}` : `a style that trains ${target.trains}`;
+            const unknown = combatStyle.known ? '' : ' (the combat tab is unrecognised, so style metadata is unknown)';
+            return { success: false, message: `${combatStyle.weaponName} has no ${wanted}${unknown}`, reason: 'no_such_style' };
+        }
+
+        if (style.index !== 0 && combatStyle.currentStyle === style.index) {
+            return { success: true, message: `${style.name} (${style.type}) is already selected`, style, changed: false };
+        }
+
+        const before = combatStyle.currentStyle;
+        // One retry: the server drops the click while the player is busy.
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const sent = await this.sdk.sendSetCombatStyle(style.index);
+            if (!sent.success) {
+                return { success: false, message: `Could not click ${style.name}: ${sent.message}`, style, reason: 'dispatch_failed' };
+            }
+            try {
+                await this.sdk.waitForCondition(s => s.combatStyle?.currentStyle === style!.index, timeout);
+                return { success: true, message: `Selected ${style.name} (${style.type}), training ${style.trainsSkills.join('/')}`, style, changed: before !== style.index };
+            } catch {
+                // not applied yet: retry once
+            }
+        }
+        return {
+            success: false,
+            message: `${style.name} was clicked but com_mode stayed ${this.sdk.getState()?.combatStyle?.currentStyle ?? before} (the server ignores style clicks while the player is busy)`,
+            style,
+            reason: 'not_applied'
+        };
+    }
+
     /** Attack another player (OPPLAYER2). Prefer {@link attack}, which also takes NPCs. */
     async attackPlayer(target: NearbyPlayer | string | RegExp, timeout: number = 5000): Promise<AttackResult> {
         await this.dismissBlockingUI();
@@ -3841,7 +3913,7 @@ export class BotActions {
     ): Promise<SmithResult> {
         if (typeof product !== 'string' && typeof product !== 'number') {
             // A RegExp product used to throw deep inside on .toLowerCase().
-            return { success: false, message: `smithAtAnvil takes a product name string (e.g. 'mithril longsword'), got: ${product}`, reason: 'level_too_low' };
+            return { success: false, message: `smithAtAnvil takes a product name string (e.g. 'mithril longsword'), got: ${product}`, reason: 'unknown_product' };
         }
 
         // A 'mithril longsword' request must smith with mithril bars — the
@@ -3856,8 +3928,8 @@ export class BotActions {
 
         await this.dismissBlockingUI();
 
-        // Check for hammer
-        const hammer = this.sdk.findInventoryItem(/hammer/i);
+        // Check for hammer (exactly "Hammer": /hammer/i also matched a warhammer, which can't smith)
+        const hammer = this.sdk.findInventoryItem(/^hammer$/i);
         if (!hammer) {
             return { success: false, message: 'No hammer in inventory', reason: 'no_hammer' };
         }
@@ -3902,7 +3974,7 @@ export class BotActions {
                     componentId = partialMatch.component;
                     componentSlot = partialMatch.slot;
                 } else {
-                    return { success: false, message: `Unknown smithing product: ${product}`, reason: 'level_too_low' };
+                    return { success: false, message: `Unknown smithing product: ${product}`, reason: 'unknown_product' };
                 }
             }
         }

@@ -469,6 +469,19 @@ export interface CombatStyleState {
     known: boolean;
 }
 
+/** What {@link BotActions.setCombatStyle} takes: a style index, or the skill the style should train. */
+export type CombatStyleTarget = number | { trains: 'Attack' | 'Strength' | 'Defence' | 'Ranged' | 'Magic' };
+
+export interface SetCombatStyleResult {
+    success: boolean;
+    message: string;
+    /** The style that was asked for, once resolved. */
+    style?: CombatStyleOption;
+    /** False when the style was already selected (nothing to observe changing). */
+    changed?: boolean;
+    reason?: 'no_combat_style_state' | 'no_such_style' | 'dispatch_failed' | 'not_applied';
+}
+
 export interface CombatEvent {
     tick: number;
     /** Monotonic publication revision when this event first became agent-visible. */
@@ -885,7 +898,7 @@ export interface SmithResult {
     xpGained?: number;
     itemsSmithed?: number;
     product?: InventoryItem;
-    reason?: 'no_hammer' | 'no_bars' | 'no_anvil' | 'cant_reach' | 'interface_not_opened' | 'level_too_low' | 'timeout' | 'no_xp_gained';
+    reason?: 'no_hammer' | 'no_bars' | 'no_anvil' | 'cant_reach' | 'interface_not_opened' | 'level_too_low' | 'unknown_product' | 'timeout' | 'no_xp_gained';
 }
 
 export interface OpenBankResult {

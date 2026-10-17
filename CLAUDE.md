@@ -192,6 +192,7 @@ For the complete method reference, see **[sdk/API.md](sdk/API.md)** (auto-genera
 | `interactLoc(target, option?)`  | Walk to loc, interact with any option (e.g. `'mine'`, `'smelt'`) |
 | `attack(target)`                | Walk to an NPC or player and start combat                    |
 | `castSpell(target, spell)`      | Cast a combat spell on an NPC or player                         |
+| `setCombatStyle(target)`       | Select a combat style by index or `{ trains: 'Strength' }`; waits for it to apply |
 | `pickpocketNpc(target)`         | Pickpocket NPC, detects XP gain vs stun                          |
 | `chopTree(target?)`             | Chop tree, wait for logs                                         |
 | `pickupItem(target)`            | Pick up ground item                                              |

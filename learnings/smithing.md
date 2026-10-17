@@ -34,8 +34,8 @@ await sdk.waitForCondition(
 
 | Location          | Coordinates  | Furnace IDs | Notes                                                             |
 | ----------------- | ------------ | ----------- | ----------------------------------------------------------------- |
-| Lumbridge furnace | (3225, 3256) | 2785, 2781  | Right next to spawn, reliable. 2781 has `Smelt`; 2785 is a decoy. |
-| Al Kharid furnace | (3273, 3184) | 2785, 2781  | Needs 10gp toll gate. 2781 has `Smelt`; 2785 is a decoy.          |
+| Lumbridge furnace | (3226, 3255) | 2781 (2785) | Right next to spawn, reliable. (3226, 3255) is 2781, the one with `Smelt`; the 2785 decoy is at (3225, 3256). |
+| Al Kharid furnace | (3272, 3185) | 2781 (2785) | Needs 10gp toll gate. (3272, 3185) is 2781, the one with `Smelt`; the 2785 decoy is at (3273, 3184).          |
 
 ### Anvil Locations
 
