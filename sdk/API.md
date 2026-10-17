@@ -46,6 +46,7 @@
 | `async useItemOnNpc(item: InventoryItem \| string \| RegExp, npc: NearbyNpc \| string \| RegExp, options: { timeout?: number } = {}): Promise<UseItemOnNpcResult>` | Use an inventory item on a nearby NPC (e.g., bones on altar keeper, item on NPC). Walks to the NPC first (handling doors), then uses the item. |
 | `async dropItem(target: InventoryItem \| string \| RegExp, amount: number \| 'all' = 'all'): Promise<DropItemResult>` | Drop inventory items by name, waiting for each drop to land before sending the next. `sendDropItem` on a slot the server has already emptied silently no-ops, so slot loops built on stale state lose most of their sends; this re-resolves the slot from fresh state every time. `amount` counts inventory slots (a whole stack drops as one). Pass `'all'` or `-1` to drop every matching slot. |
 | `async closeInterface(timeout: number = 5000): Promise<ActionResult>` | Close any open modal interface (bank, book, quest scroll, etc.). |
+| `async setCombatStyle(target: CombatStyleTarget, timeout: number = 3000): Promise<SetCombatStyleResult>` | Select a combat style and wait until the server has applied it. Takes a style index, or the skill to train: `{ trains: 'Strength' }` picks the style that trains only Strength (aggressive), falling back to one that trains it among others (controlled) when the weapon has no such style. Indices depend on the weapon (index 2 is aggressive on a stabsword but controlled on a scimitar), so the skill form is resolved from `state.combatStyle.styles`, never assumed. ```ts const result = await bot.setCombatStyle({ trains: 'Defence' }); if (!result.success) console.log(result.reason, result.message); ``` Confirmation is `state.combatStyle.currentStyle` (varp 43, com_mode) reaching the index. The server ignores the click while the player is busy and only resyncs the varp, so a click that changed nothing comes back as `reason: 'not_applied'`. com_mode is not saved: it is back to 0 after every login, so set it again then. com_mode reads 0 until the server sends it, so an index-0 request is always clicked rather than trusted as already selected. |
 
 ### Woodcutting & Firemaking
 
@@ -489,6 +490,20 @@ interface CombatStyleState {
 }
 ```
 
+### SetCombatStyleResult
+
+```typescript
+interface SetCombatStyleResult {
+  success: boolean;
+  message: string;
+  /** The style that was asked for, once resolved. */
+  style?: CombatStyleOption;
+  /** False when the style was already selected (nothing to observe changing). */
+  changed?: boolean;
+  reason?: 'no_combat_style_state' | 'no_such_style' | 'dispatch_failed' | 'not_applied';
+}
+```
+
 ### PrayerState
 
 ```typescript
@@ -791,7 +806,7 @@ interface SmithResult {
   xpGained?: number;
   itemsSmithed?: number;
   product?: InventoryItem;
-  reason?: 'no_hammer' | 'no_bars' | 'no_anvil' | 'cant_reach' | 'interface_not_opened' | 'level_too_low' | 'timeout' | 'no_xp_gained';
+  reason?: 'no_hammer' | 'no_bars' | 'no_anvil' | 'cant_reach' | 'interface_not_opened' | 'level_too_low' | 'unknown_product' | 'timeout' | 'no_xp_gained';
 }
 ```
 

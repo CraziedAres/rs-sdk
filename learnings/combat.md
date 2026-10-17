@@ -23,24 +23,22 @@ if (npc && attackOpt) {
 
 ## Combat Style Cycling
 
-Combat-style indices depend on the equipped weapon the SDK reads
-the table from the combat tab the server installed, so resolve indices from state
+Combat-style indices depend on the equipped weapon (index 2 is aggressive on a
+stabsword but controlled on a scimitar), so ask for the skill and let
+`bot.setCombatStyle` resolve the index from `state.combatStyle.styles`:
 
 ```typescript
-const targetSkill = 'Defence';
-// A controlled style lists every skill it trains, so match against trainsSkills.
-const style = sdk.getState()?.combatStyle?.styles.find(
-    candidate => candidate.trainsSkills.includes(targetSkill),
-);
-if (!style) {
-    throw new Error(`No ${targetSkill} style is available for the equipped weapon`);
+const result = await bot.setCombatStyle({ trains: 'Defence' });
+if (!result.success) {
+    // no_such_style: the weapon has no Defence style; not_applied: the server
+    // ignored the click (it does while the player is busy), so retry when idle.
+    throw new Error(`${result.reason}: ${result.message}`);
 }
-await sdk.sendSetCombatStyle(style.index);
-await sdk.waitForCondition(
-    state => state.combatStyle?.currentStyle === style.index,
-    5_000,
-);
 ```
+
+It waits for `state.combatStyle.currentStyle` (varp 43, com_mode) to show the
+new style. com_mode isn't saved: **every login resets it to 0** (the first
+style, usually Accurate), so set it again after a reconnect.
 
 ## Checking Combat State
 
@@ -197,10 +195,9 @@ function getLowestCombatStat(state) {
 const state = sdk.getState();
 if (!state) throw new Error('No world state');
 const stat = getLowestCombatStat(state);
-const style = state.combatStyle?.styles.find(option => option.trainsSkills.includes(stat));
-if (!style) throw new Error(`No style trains ${stat} with the equipped weapon`);
-await sdk.sendSetCombatStyle(style.index);
-console.log(`Training ${stat} with ${style.name}`);
+const result = await bot.setCombatStyle({ trains: stat });
+if (!result.success) throw new Error(`No ${stat} style: ${result.message}`);
+console.log(`Training ${stat} with ${result.style?.name}`);
 ```
 
 This pattern enabled balanced 60+ in all melee stats.

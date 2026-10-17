@@ -73,7 +73,7 @@ while (true) {
 | Location            | Coordinates      | Spot Type    | Notes                                                                                                                                     |
 | ------------------- | ---------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | **Draynor Village** | **(3087, 3230)** | **Net/Bait** | **USE THIS for level 1.** Shrimp/anchovies. Dark wizards at (3084, 3236)/(3085, 3238) — stay south of z≈3232 if you are low combat level! |
-| Al Kharid river     | (3267, 3148)     | Lure/Bait    | Fly fishing (level 20+). 10gp toll gate to reach. Watch for a lvl 14 scorpion.                                                            |
+| Al Kharid river     | (3267, 3148)     | Net/Bait     | Shrimp/anchovies, like Draynor (npc 330 `0_51_49_saltfish`; second spot (3276, 3140)). 10gp toll gate to reach. Watch for a lvl 14 scorpion. |
 | Barbarian Village   | (3110, 3434)     | Lure/Bait    | Fly fishing (level 20+). Second spot at (3104, 3424).                                                                                     |
 
 **COMMON MISTAKE**: Lumbridge area (3238, 3251) has NO level-1 fishing spots. Use Draynor!
