@@ -50,6 +50,18 @@ export const NO_RUNES_REFUSALS = [
     "don't have enough"
 ] as const;
 
+/** What was already showing when an interaction was sent. */
+export interface InteractionBaseline {
+    tick: number;
+    animId: number;
+    /** Older clients only: the player has been idle since the baseline. */
+    sawIdle: boolean;
+    dialogPage: string | null;
+    interfaceId: number | null;
+    xp: number;
+    items: Map<number, number>;
+}
+
 export class ActionHelpers {
     constructor(private sdk: BotSDK) {}
 
@@ -213,6 +225,55 @@ export class ActionHelpers {
         return (state?.recentDialogs ?? [])
             .filter(entry => this.isMessageAfter(entry, cursor))
             .map(entry => entry.text.join(' ').toLowerCase());
+    }
+
+    // ============ Interaction Evidence ============
+
+    /** Snapshot to take just before sending an interaction; see isFreshEvidence(). */
+    interactionBaseline(): InteractionBaseline {
+        const state = this.sdk.getState();
+        const items = new Map<number, number>();
+        for (const item of state?.inventory ?? []) items.set(item.id, (items.get(item.id) ?? 0) + item.count);
+        const animId = state?.player?.animId ?? -1;
+        return {
+            tick: state?.tick ?? 0,
+            animId,
+            sawIdle: animId === -1,
+            dialogPage: state?.dialog.isOpen ? (state.dialog.pageId ?? 'open') : null,
+            interfaceId: state?.interface?.isOpen ? state.interface.interfaceId : null,
+            xp: (state?.skills ?? []).reduce((sum, s) => sum + s.experience, 0),
+            items,
+        };
+    }
+
+    /**
+     * True when the state shows something the interaction itself produced: an
+     * animation started after the baseline tick, a dialog or interface that was
+     * not already open, or XP or an item gained. The previous action's
+     * animation still playing (a felled tree read as chopping) is not evidence.
+     */
+    isFreshEvidence(base: InteractionBaseline, state: BotWorldState): boolean {
+        const player = state.player;
+        if (player) {
+            if (player.animStartTick !== undefined) {
+                if (player.animStartTick !== null && player.animStartTick > base.tick) return true;
+            } else if (player.animId === -1) {
+                // Older client without animStartTick: only an animation that
+                // was not already showing counts.
+                base.sawIdle = true;
+            } else if (base.sawIdle || player.animId !== base.animId) {
+                return true;
+            }
+        }
+        if (state.dialog.isOpen && (base.dialogPage === null || (state.dialog.pageId ?? 'open') !== base.dialogPage)) return true;
+        if (state.interface?.isOpen && state.interface.interfaceId !== base.interfaceId) return true;
+        if (state.skills.reduce((sum, s) => sum + s.experience, 0) > base.xp) return true;
+        const items = new Map<number, number>();
+        for (const item of state.inventory) items.set(item.id, (items.get(item.id) ?? 0) + item.count);
+        for (const [id, count] of items) {
+            if (count > (base.items.get(id) ?? 0)) return true;
+        }
+        return false;
     }
 
     // ============ Op Rejection ============

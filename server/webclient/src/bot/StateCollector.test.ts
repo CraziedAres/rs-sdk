@@ -76,6 +76,23 @@ function createClient() {
     return client;
 }
 
+describe('BotStateCollector animation starts', () => {
+    test('animStartTick moves when the anim-start counter does, even for the same animation', () => {
+        const client = createClient();
+        const collector = new BotStateCollector(client);
+
+        expect((collector as any).collectPlayerState(10, 100).animStartTick).toBeNull();
+        client.localPlayer.primaryAnim = 879;
+        client.localPlayer.primaryAnimStarts = 1;
+        expect((collector as any).collectPlayerState(11, 100).animStartTick).toBe(11);
+        expect((collector as any).collectPlayerState(14, 100).animStartTick).toBe(11);
+        client.localPlayer.primaryAnimStarts = 2; // same anim, re-sent
+        expect((collector as any).collectPlayerState(15, 100)).toMatchObject({ animId: 879, animStartTick: 15 });
+        client.localPlayer.primaryAnimStarts = 0; // new local player object
+        expect((collector as any).collectPlayerState(16, 100).animStartTick).toBe(15);
+    });
+});
+
 describe('BotStateCollector combat state', () => {
     test('uses the public tick for damage events and faceEntity for targeting', () => {
         const client = createClient();

@@ -547,6 +547,9 @@ export class BotActions {
         const invBefore = this.helpers.inventorySignature(this.sdk.getState());
         const inventoryChanged = (state: Parameters<ActionHelpers['inventorySignature']>[0]): boolean =>
             invBefore !== '' && this.helpers.inventorySignature(state) !== invBefore;
+        // A cooking/smelting animation from the previous use can still be
+        // showing; only one started after this click counts.
+        const baseline = this.helpers.interactionBaseline();
 
         // Use the item on the location
         const result = await this.sdk.sendUseItemOnLoc(resolvedItem.slot, locNow.x, locNow.z, locNow.id);
@@ -567,13 +570,9 @@ export class BotActions {
                     }
                 }
 
-                // Check if dialog/interface opened (crafting menu, etc.)
-                if (state.dialog.isOpen || state.interface?.isOpen) {
-                    return true;
-                }
-
-                // Check if player started animating (cooking, smelting, etc.)
-                if (state.player && state.player.animId !== -1) {
+                // A dialog/interface opened (crafting menu, etc.) or an
+                // animation started (cooking, smelting, etc.)
+                if (this.helpers.isFreshEvidence(baseline, state)) {
                     return true;
                 }
 
@@ -647,6 +646,7 @@ export class BotActions {
         const invBefore = this.helpers.inventorySignature(this.sdk.getState());
         const inventoryChanged = (state: Parameters<ActionHelpers['inventorySignature']>[0]): boolean =>
             invBefore !== '' && this.helpers.inventorySignature(state) !== invBefore;
+        const baseline = this.helpers.interactionBaseline();
 
         // Use the item on the NPC
         const result = await this.sdk.sendUseItemOnNpc(resolvedItem.slot, npcNow.index);
@@ -667,13 +667,8 @@ export class BotActions {
                     }
                 }
 
-                // Check if dialog/interface opened
-                if (state.dialog.isOpen || state.interface?.isOpen) {
-                    return true;
-                }
-
-                // Check if player started animating
-                if (state.player && state.player.animId !== -1) {
+                // A dialog/interface opened or an animation started since the click
+                if (this.helpers.isFreshEvidence(baseline, state)) {
                     return true;
                 }
 
@@ -4211,8 +4206,10 @@ export class BotActions {
     /**
      * Interact with a nearby location object (rock, fishing spot, furnace, etc.).
      * Walks to the target first (handling doors), sends the interaction, then waits
-     * for an effect (animation, dialog, interface) or detects failure when the player
-     * has been idle for 2 ticks with nothing happening.
+     * for an effect produced after the click (an animation starting, a dialog or interface
+     * opening, XP or an item gained, the loc changing) or detects failure when the player
+     * has been idle for 2 ticks with nothing happening. An animation left over from the
+     * previous action does not count.
      * Success can mean the action started, before its product arrives; use mineRock for completed mining.
      * @param target - NearbyLoc object or name string/regex to find
      * @param option - Option index or name regex to match (default: 1, the first option)
@@ -4315,6 +4312,19 @@ export class BotActions {
             state?.player != null &&
             Math.max(Math.abs(state.player.x - dispatchX), Math.abs(state.player.z - dispatchZ)) > 8;
 
+        // Only evidence produced after the click counts: the previous
+        // action's animation can still be showing (a just-felled tree read
+        // as chopping). The loc itself changing (tree to stump, door swung)
+        // counts too, if it was in view to begin with.
+        const baseline = this.helpers.interactionBaseline();
+        const sent = locNow;
+        const sameLoc = (l: NearbyLoc) => l.x === sent.x && l.z === sent.z && l.id === sent.id;
+        const locWasVisible = this.sdk.getState()?.nearbyLocs.some(sameLoc) ?? false;
+        const worked = (state: NonNullable<ReturnType<BotSDK['getState']>>): boolean =>
+            this.helpers.isFreshEvidence(baseline, state) ||
+            levelChanged(state) || teleported(state) ||
+            (locWasVisible && !state.nearbyLocs.some(sameLoc));
+
         const result = await this.sdk.sendInteractLoc(locNow.x, locNow.z, locNow.id, opIndex);
         if (!result.success) {
             return { success: false, message: result.message, reason: 'timeout' };
@@ -4330,10 +4340,7 @@ export class BotActions {
                     }
                 }
 
-                // Success indicators
-                if (state.dialog.isOpen || state.interface?.isOpen) return true;
-                if (state.player && state.player.animId !== -1) return true;
-                if (levelChanged(state) || teleported(state)) return true;
+                if (worked(state)) return true;
 
                 // Track movement — if player moved, update last move tick
                 if (state.player && (state.player.x !== lastX || state.player.z !== lastZ)) {
@@ -4352,26 +4359,22 @@ export class BotActions {
                 return { success: false, message: `Can't reach ${locNow.name}`, reason: 'cant_reach' };
             }
 
-            if (finalState.dialog.isOpen || finalState.interface?.isOpen ||
-                (finalState.player && finalState.player.animId !== -1) ||
-                levelChanged(finalState) || teleported(finalState)) {
+            if (worked(finalState)) {
                 return { success: true, message: `Interacted with ${locNow.name}` };
             }
 
             // The idle window can expire a tick before the server responds.
             // Short grace for the evidence to land - see interactNpc/talkTo.
             try {
-                await this.sdk.waitForCondition(s =>
-                    s.dialog.isOpen || Boolean(s.interface?.isOpen) ||
-                    (s.player != null && s.player.animId !== -1) ||
-                    levelChanged(s) || teleported(s), ticksToMs(this.sdk, 20));
+                await this.sdk.waitForCondition(worked, ticksToMs(this.sdk, 20));
                 return { success: true, message: `Interacted with ${locNow.name}` };
             } catch {
                 return { success: false, message: `Nothing happened interacting with ${locNow.name}`, reason: 'timeout' };
             }
         } catch {
             // Even on the safety-net timeout, a level transition means it worked.
-            if (levelChanged(this.sdk.getState()) || teleported(this.sdk.getState())) {
+            const lateState = this.sdk.getState();
+            if (lateState && worked(lateState)) {
                 return { success: true, message: `Interacted with ${locNow.name}` };
             }
             return { success: false, message: `Timed out interacting with ${locNow.name}`, reason: 'timeout' };
@@ -4381,8 +4384,9 @@ export class BotActions {
     /**
      * Interact with a nearby NPC using a specified option (e.g. "Trade", "Pickpocket", "Fish").
      * Walks to the NPC first (handling doors), sends the interaction, then waits
-     * for an effect (animation, dialog, interface) or detects failure when the player
-     * has been idle for 2 ticks with nothing happening.
+     * for an effect produced after the click (an animation starting, a dialog or interface
+     * opening, XP or an item gained) or detects failure when the player has been idle for
+     * 2 ticks with nothing happening. An animation left over from the previous action does not count.
      * @param target - NearbyNpc object or name string/regex to find
      * @param option - Option index or name regex to match (default: 1, the first option)
      */
@@ -4446,6 +4450,11 @@ export class BotActions {
         let lastX = this.sdk.getState()?.player?.x ?? 0;
         let lastZ = this.sdk.getState()?.player?.z ?? 0;
 
+        // Only evidence produced after the click counts - the previous
+        // action's animation can outlive it (a moved fishing spot).
+        const baseline = this.helpers.interactionBaseline();
+        const worked = (state: NonNullable<ReturnType<BotSDK['getState']>>) => this.helpers.isFreshEvidence(baseline, state);
+
         const result = await this.sdk.sendInteractNpc(npcNow.index, opIndex);
         if (!result.success) {
             return { success: false, message: result.message, reason: 'timeout' };
@@ -4461,9 +4470,7 @@ export class BotActions {
                     }
                 }
 
-                // Success indicators
-                if (state.dialog.isOpen || state.interface?.isOpen) return true;
-                if (state.player && state.player.animId !== -1) return true;
+                if (worked(state)) return true;
 
                 // The server took the packet and discarded it
                 if (this.helpers.wasOpRejectedSince(rejectCursor, state)) return true;
@@ -4485,8 +4492,7 @@ export class BotActions {
                 return { success: false, message: `Can't reach ${npcNow.name}`, reason: 'cant_reach' };
             }
 
-            if (finalState.dialog.isOpen || finalState.interface?.isOpen ||
-                (finalState.player && finalState.player.animId !== -1)) {
+            if (worked(finalState)) {
                 return { success: true, message: `Interacted with ${npcNow.name}` };
             }
 
@@ -4504,9 +4510,7 @@ export class BotActions {
             // (walk-up finished, NPC still turning). Short grace for the
             // evidence to land before declaring failure - see talkTo.
             try {
-                await this.sdk.waitForCondition(s =>
-                    s.dialog.isOpen || Boolean(s.interface?.isOpen) ||
-                    (s.player != null && s.player.animId !== -1), ticksToMs(this.sdk, 20));
+                await this.sdk.waitForCondition(worked, ticksToMs(this.sdk, 20));
                 return { success: true, message: `Interacted with ${npcNow.name}` };
             } catch {
                 return { success: false, message: `Nothing happened interacting with ${npcNow.name}`, reason: 'timeout' };

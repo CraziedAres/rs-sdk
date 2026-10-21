@@ -38,6 +38,8 @@ export default abstract class ClientEntity extends ModelSource {
     primaryAnimCycle: number = 0;
     primaryAnimDelay: number = 0;
     primaryAnimLoop: number = 0;
+    /** Bumped by every ANIM update that starts or restarts primaryAnim, so a re-sent animation is visible. */
+    primaryAnimStarts: number = 0;
     spotanimId: number = -1;
     spotanimFrame: number = 0;
     spotanimCycle: number = 0;

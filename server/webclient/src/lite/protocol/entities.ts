@@ -53,6 +53,10 @@ export function applyAnimMask(e: ClientEntity, seqId: number, delay: number): vo
         e.primaryAnimLoop = 0;
         e.preanimRouteLength = e.routeLength;
     }
+
+    if (seqId !== -1 && e.primaryAnim === seqId) {
+        e.primaryAnimStarts++;
+    }
 }
 
 // ============================================================== players

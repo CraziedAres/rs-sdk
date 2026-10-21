@@ -10473,6 +10473,10 @@ export class Client extends GameShell {
                 player.primaryAnimLoop = 0;
                 player.preanimRouteLength = player.routeLength;
             }
+
+            if (seqId !== -1 && player.primaryAnim === seqId) {
+                player.primaryAnimStarts++;
+            }
         }
 
         if ((mask & PlayerUpdate.FACEENTITY) !== 0) {
@@ -10799,6 +10803,10 @@ export class Client extends GameShell {
                     npc.primaryAnimDelay = delay;
                     npc.primaryAnimLoop = 0;
                     npc.preanimRouteLength = npc.routeLength;
+                }
+
+                if (anim !== -1 && npc.primaryAnim === anim) {
+                    npc.primaryAnimStarts++;
                 }
             }
 

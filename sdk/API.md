@@ -66,8 +66,8 @@
 | Signature | Description |
 |---|---|
 | `async talkTo(target: NearbyNpc \| string \| RegExp): Promise<TalkResult>` | Talk to an NPC and wait for dialog to open. Walks to the NPC first (handling doors). |
-| `async interactLoc(target: NearbyLoc \| string \| RegExp, option: number \| string \| RegExp = 1): Promise<InteractLocResult>` | Interact with a nearby location object (rock, fishing spot, furnace, etc.). Walks to the target first (handling doors), sends the interaction, then waits for an effect (animation, dialog, interface) or detects failure when the player has been idle for 2 ticks with nothing happening. Success can mean the action started, before its product arrives; use mineRock for completed mining. |
-| `async interactNpc(target: NearbyNpc \| string \| RegExp, option: number \| string \| RegExp = 1): Promise<InteractNpcResult>` | Interact with a nearby NPC using a specified option (e.g. "Trade", "Pickpocket", "Fish"). Walks to the NPC first (handling doors), sends the interaction, then waits for an effect (animation, dialog, interface) or detects failure when the player has been idle for 2 ticks with nothing happening. |
+| `async interactLoc(target: NearbyLoc \| string \| RegExp, option: number \| string \| RegExp = 1): Promise<InteractLocResult>` | Interact with a nearby location object (rock, fishing spot, furnace, etc.). Walks to the target first (handling doors), sends the interaction, then waits for an effect produced after the click (an animation starting, a dialog or interface opening, XP or an item gained, the loc changing) or detects failure when the player has been idle for 2 ticks with nothing happening. An animation left over from the previous action does not count. Success can mean the action started, before its product arrives; use mineRock for completed mining. |
+| `async interactNpc(target: NearbyNpc \| string \| RegExp, option: number \| string \| RegExp = 1): Promise<InteractNpcResult>` | Interact with a nearby NPC using a specified option (e.g. "Trade", "Pickpocket", "Fish"). Walks to the NPC first (handling doors), sends the interaction, then waits for an effect produced after the click (an animation starting, a dialog or interface opening, XP or an item gained) or detects failure when the player has been idle for 2 ticks with nothing happening. An animation left over from the previous action does not count. |
 | `async pickpocketNpc(target: NearbyNpc \| string \| RegExp): Promise<PickpocketResult>` | Pickpocket an NPC. Handles door retrying if path is blocked. |
 
 ### Movement
@@ -357,6 +357,8 @@ interface PlayerState {
   animId: number;
   /** Current spot animation ID (-1 = none) */
   spotanimId: number;
+  /** Public game tick when an animation last started or restarted (null before any). animId alone can't tell a fresh action from the previous one's animation still playing; this moves each time the server sends one. Absent on older clients. */
+  animStartTick?: number | null;
   /** Combat state tracking */
   combat: PlayerCombatState;
   /** True while the player's hitpoints are zero. */
