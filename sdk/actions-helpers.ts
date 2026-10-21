@@ -3,6 +3,7 @@
 
 import { BotSDK } from './index';
 import { executionWait } from './execution-context';
+import { ticksToMs } from './tick-clock';
 import { shortestNameMatch } from './action-quantity';
 import type {
     NearbyLoc,
@@ -482,7 +483,7 @@ export class ActionHelpers {
                     );
                     if (!doorNow) return true; // Door gone = opened
                     return !doorNow.optionsWithIndex.some(o => /^open$/i.test(o.text));
-                }, 8000);
+                }, ticksToMs(this.sdk, 80));
 
                 if (failReason) return failReason;
 

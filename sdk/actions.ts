@@ -4,6 +4,7 @@
 
 import { BotSDK } from './index';
 import { throwIfExecutionAborted, withExecutionDeadline } from './execution-context';
+import { ticksToMs } from './tick-clock';
 import { GEActions } from './ge-actions';
 import type { GEOfferRequest, GEActionResult } from './ge-types';
 import { ActionHelpers, ALREADY_FIGHTING_REFUSALS, NO_RUNES_REFUSALS } from './actions-helpers';
@@ -453,7 +454,7 @@ export class BotActions {
                 const hasClose = doorNow.optionsWithIndex.some(o => /^close$/i.test(o.text));
                 const hasOpen = doorNow.optionsWithIndex.some(o => /^open$/i.test(o.text));
                 return hasClose && !hasOpen;
-            }, 5000);
+            }, ticksToMs(this.sdk, 50));
 
             if (this.helpers.checkCantReachMessage(msgBaseline)) {
                 return { success: false, message: `Cannot reach ${door.name} - still blocked`, reason: 'open_failed', door };
@@ -502,7 +503,7 @@ export class BotActions {
         loc: NearbyLoc | string | RegExp,
         options: { timeout?: number } = {}
     ): Promise<UseItemOnLocResult> {
-        const { timeout = 10000 } = options;
+        const { timeout = ticksToMs(this.sdk, 100) } = options;
 
         await this.dismissBlockingUI();
 
@@ -608,7 +609,7 @@ export class BotActions {
         npc: NearbyNpc | string | RegExp,
         options: { timeout?: number } = {}
     ): Promise<UseItemOnNpcResult> {
-        const { timeout = 10000 } = options;
+        const { timeout = ticksToMs(this.sdk, 100) } = options;
 
         await this.dismissBlockingUI();
 
@@ -723,7 +724,7 @@ export class BotActions {
             const finalState = await this.sdk.waitForCondition(state => {
                 if (countItems(state.inventory, /logs/i) > logsBefore) return true;
                 return !state.nearbyLocs.some(l => l.x === tree.x && l.z === tree.z && l.id === tree.id);
-            }, 30000);
+            }, ticksToMs(this.sdk, 300));
 
             if (countItems(finalState.inventory, /logs/i) <= logsBefore) {
                 return { success: false, message: `${tree.name} was felled by someone else` };
@@ -784,7 +785,7 @@ export class BotActions {
                 }
 
                 return false;
-            }, 30000);
+            }, ticksToMs(this.sdk, 300));
 
             const fmAfter = this.sdk.getSkill('Firemaking')?.experience || 0;
             const xpGained = fmAfter - fmBefore;
@@ -937,7 +938,7 @@ export class BotActions {
                 // Item disappeared from ground (picked up by us or someone else)
                 const stillOnGround = state.groundItems.some(g => g.x === item.x && g.z === item.z && g.id === item.id);
                 return !stillOnGround;
-            }, 10000);
+            }, ticksToMs(this.sdk, 100));
 
             // Check for failure reasons
             for (const msg of finalState.gameMessages) {
@@ -958,7 +959,7 @@ export class BotActions {
             if (gained <= 0) {
                 try {
                     const settled = await this.sdk.waitForCondition(
-                        s => countItems(s.inventory, item.id) > countBefore, 1500);
+                        s => countItems(s.inventory, item.id) > countBefore, ticksToMs(this.sdk, 15));
                     gained = countItems(settled.inventory, item.id) - countBefore;
                 } catch { /* no gain observed */ }
             }
@@ -1044,7 +1045,7 @@ export class BotActions {
                 if (state.tick - lastMoveTick >= 2) return true;
 
                 return false;
-            }, 30000); // safety net only
+            }, ticksToMs(this.sdk, 300)); // safety net only
 
             if (this.helpers.checkCantReachMessage(msgBaseline)) {
                 return { success: false, message: `Cannot reach ${npcNow.name}` };
@@ -1058,7 +1059,7 @@ export class BotActions {
             // arrives (walk-up finished, NPC still turning). Give the dialog a
             // short grace instead of reporting failure on a talk that worked.
             try {
-                const lateState = await this.sdk.waitForCondition(s => s.dialog.isOpen, 2000);
+                const lateState = await this.sdk.waitForCondition(s => s.dialog.isOpen, ticksToMs(this.sdk, 20));
                 return { success: true, dialog: lateState.dialog, message: `Talking to ${npcNow.name}` };
             } catch {
                 return { success: false, message: 'Dialog did not open' };
@@ -1068,9 +1069,13 @@ export class BotActions {
         }
     }
 
-    /** Walk to coordinates using pathfinding, auto-opening doors. Bounds the whole route with options.timeout (default 120s), refuses stale state, and aborts on cancellation or death. */
-    async walkTo(x: number, z: number, tolerance: number = 3, options: { timeout?: number } = {}): Promise<ActionResult> {
-        const timeout = options.timeout ?? 120_000;
+    /**
+     * Walk to coordinates using pathfinding, auto-opening doors. Bounds the whole route with
+     * options.timeout in ms, else options.timeoutTicks game ticks (default 1200: 120 s at
+     * 100 ms/tick, 360 s at 300 ms/tick). Refuses stale state and aborts on cancellation or death.
+     */
+    async walkTo(x: number, z: number, tolerance: number = 3, options: { timeout?: number; timeoutTicks?: number } = {}): Promise<ActionResult> {
+        const timeout = options.timeout ?? ticksToMs(this.sdk, options.timeoutTicks ?? 1200);
         if (!Number.isFinite(timeout) || timeout <= 0 || !Number.isFinite(tolerance) || tolerance < 0) {
             return { success: false, message: 'walkTo requires a positive finite timeout and a non-negative finite tolerance' };
         }
@@ -2877,7 +2882,7 @@ export class BotActions {
                 const hp = state.skills.find(s => s.name === 'Hitpoints')?.level ?? 10;
                 const foodCount = state.inventory.filter(i => i.id === food.id).length;
                 return hp > hpBefore || foodCount < foodCountBefore;
-            }, 5000);
+            }, ticksToMs(this.sdk, 50));
 
             const hpAfter = this.sdk.getSkill('Hitpoints')?.level ?? 10;
             return { success: true, hpGained: hpAfter - hpBefore, message: `Ate ${food.name}` };
@@ -2901,8 +2906,11 @@ export class BotActions {
      * PvP attacks are refused outside the wilderness and across too big a level
      * gap; those come back as `reason: 'not_attackable'` with the server's own
      * wording in `message`.
+     *
+     * `timeout` is in ms; by default 50 game ticks.
      */
-    async attack(target: CombatTarget, timeout: number = 5000): Promise<AttackResult> {
+    async attack(target: CombatTarget, timeout?: number): Promise<AttackResult> {
+        timeout ??= ticksToMs(this.sdk, 50);
         await this.dismissBlockingUI();
 
         const entity = this.helpers.resolveCombatTarget(target);
@@ -2934,8 +2942,11 @@ export class BotActions {
      * com_mode is not saved: it is back to 0 after every login, so set it again then.
      * com_mode reads 0 until the server sends it, so an index-0 request is always clicked
      * rather than trusted as already selected.
+     *
+     * `timeout` is in ms; by default 30 game ticks.
      */
-    async setCombatStyle(target: CombatStyleTarget, timeout: number = 3000): Promise<SetCombatStyleResult> {
+    async setCombatStyle(target: CombatStyleTarget, timeout?: number): Promise<SetCombatStyleResult> {
+        timeout ??= ticksToMs(this.sdk, 30);
         await this.dismissBlockingUI();
 
         const combatStyle = this.sdk.getState()?.combatStyle;
@@ -2983,8 +2994,9 @@ export class BotActions {
         };
     }
 
-    /** Attack another player (OPPLAYER2). Prefer {@link attack}, which also takes NPCs. */
-    async attackPlayer(target: NearbyPlayer | string | RegExp, timeout: number = 5000): Promise<AttackResult> {
+    /** Attack another player (OPPLAYER2). Prefer {@link attack}, which also takes NPCs. `timeout` is in ms; by default 50 game ticks. */
+    async attackPlayer(target: NearbyPlayer | string | RegExp, timeout?: number): Promise<AttackResult> {
+        timeout ??= ticksToMs(this.sdk, 50);
         await this.dismissBlockingUI();
 
         const player = typeof target === 'object' && 'index' in target
@@ -3241,8 +3253,11 @@ export class BotActions {
      *
      * Magic XP is the evidence of a cast landing, so a splash still counts as
      * success with `hit: false`.
+     *
+     * `timeout` is in ms; by default 30 game ticks.
      */
-    async castSpell(target: CombatTarget, spellComponent: number | string, timeout: number = 3000): Promise<CastSpellResult> {
+    async castSpell(target: CombatTarget, spellComponent: number | string, timeout?: number): Promise<CastSpellResult> {
+        timeout ??= ticksToMs(this.sdk, 30);
         const resolvedSpell = this.resolveSpellComponent(spellComponent);
         if (resolvedSpell === null) {
             return { success: false, message: `Unknown spell: ${spellComponent} - pass a component id (Spells.WIND_STRIKE = 1152) or a known combat spell name`, reason: 'unknown_spell' };
@@ -3256,8 +3271,9 @@ export class BotActions {
         return this.castSpellOnEntity(entity, resolvedSpell, timeout);
     }
 
-    /** Cast a combat spell on another player (OPPLAYERT). Prefer {@link castSpell}. */
-    async castSpellOnPlayer(target: NearbyPlayer | string | RegExp, spellComponent: number | string, timeout: number = 3000): Promise<CastSpellResult> {
+    /** Cast a combat spell on another player (OPPLAYERT). Prefer {@link castSpell}. `timeout` is in ms; by default 30 game ticks. */
+    async castSpellOnPlayer(target: NearbyPlayer | string | RegExp, spellComponent: number | string, timeout?: number): Promise<CastSpellResult> {
+        timeout ??= ticksToMs(this.sdk, 30);
         const resolvedSpell = this.resolveSpellComponent(spellComponent);
         if (resolvedSpell === null) {
             return { success: false, message: `Unknown spell: ${spellComponent} - pass a component id (Spells.WIND_STRIKE = 1152) or a known combat spell name`, reason: 'unknown_spell' };
@@ -3508,7 +3524,7 @@ export class BotActions {
         try {
             await this.sdk.waitForCondition(
                 s => s.dialog.isOpen || s.interface?.isOpen,
-                5000
+                ticksToMs(this.sdk, 50)
             );
         } catch {
             return { success: false, message: 'Fletching dialog did not open' };
@@ -3693,7 +3709,7 @@ export class BotActions {
         try {
             await this.sdk.waitForCondition(
                 s => s.dialog.isOpen || s.interface?.isOpen,
-                10000
+                ticksToMs(this.sdk, 100)
             );
         } catch {
             return { success: false, message: 'Crafting interface did not open', reason: 'interface_not_opened' };
@@ -3916,7 +3932,7 @@ export class BotActions {
      */
     async smithAtAnvil(
         product: string | number = 'dagger',
-        options: { barPattern?: RegExp; timeout?: number } = {}
+        options: { barPattern?: RegExp; timeout?: number; timeoutTicks?: number } = {}
     ): Promise<SmithResult> {
         if (typeof product !== 'string' && typeof product !== 'number') {
             // A RegExp product used to throw deep inside on .toLowerCase().
@@ -3931,7 +3947,7 @@ export class BotActions {
             : null;
         const metal = metalMatch?.[1];
         const metalBar = metal !== undefined ? BotActions.METAL_BAR_PATTERNS[metal] : undefined;
-        const { barPattern = metalBar ?? /bar$/i, timeout = 10000 } = options;
+        const { barPattern = metalBar ?? /bar$/i, timeout = ticksToMs(this.sdk, options.timeoutTicks ?? 100) } = options;
 
         await this.dismissBlockingUI();
 
@@ -4089,7 +4105,7 @@ export class BotActions {
         try {
             opened = await this.sdk.waitForCondition(
                 s => anvilOpen(s) || smithed(s) || refusal(s) !== null || s.dialog.isOpen,
-                5000
+                ticksToMs(this.sdk, 50)
             );
         } catch {
             const s = this.sdk.getState();
@@ -4134,8 +4150,8 @@ export class BotActions {
     // ============ Porcelain: Generic Interactions ============
 
     /** Mine a rock and wait for new ore plus Mining XP. Rock names have a "Rocks" prefix: use /copper ore/i for rocks and /^copper ore$/i for inventory. */
-    async mineRock(target: NearbyLoc | string | RegExp = /rocks?/i, options: { timeout?: number } = {}): Promise<MineRockResult> {
-        const timeout = options.timeout ?? 30_000;
+    async mineRock(target: NearbyLoc | string | RegExp = /rocks?/i, options: { timeout?: number; timeoutTicks?: number } = {}): Promise<MineRockResult> {
+        const timeout = options.timeout ?? ticksToMs(this.sdk, options.timeoutTicks ?? 300);
         if (!Number.isFinite(timeout) || timeout <= 0) return { success: false, reason: 'timeout', message: 'mineRock requires a positive finite timeout', oresMined: 0, xpGained: 0 };
         return withExecutionDeadline(timeout, () => this._mineRockOnce(target, timeout),
             () => ({ success: false, reason: 'timeout', message: `Mining timed out after ${timeout}ms`, oresMined: 0, xpGained: 0 }));
@@ -4330,7 +4346,7 @@ export class BotActions {
                 if (state.tick - lastMoveTick >= 2) return true;
 
                 return false;
-            }, 30000); // safety net only
+            }, ticksToMs(this.sdk, 300)); // safety net only
 
             if (this.helpers.checkCantReachMessage(msgBaseline)) {
                 return { success: false, message: `Can't reach ${locNow.name}`, reason: 'cant_reach' };
@@ -4348,7 +4364,7 @@ export class BotActions {
                 await this.sdk.waitForCondition(s =>
                     s.dialog.isOpen || Boolean(s.interface?.isOpen) ||
                     (s.player != null && s.player.animId !== -1) ||
-                    levelChanged(s) || teleported(s), 2000);
+                    levelChanged(s) || teleported(s), ticksToMs(this.sdk, 20));
                 return { success: true, message: `Interacted with ${locNow.name}` };
             } catch {
                 return { success: false, message: `Nothing happened interacting with ${locNow.name}`, reason: 'timeout' };
@@ -4463,7 +4479,7 @@ export class BotActions {
                 if (state.tick - lastMoveTick >= 2) return true;
 
                 return false;
-            }, 30000); // safety net only
+            }, ticksToMs(this.sdk, 300)); // safety net only
 
             if (this.helpers.checkCantReachMessage(msgBaseline)) {
                 return { success: false, message: `Can't reach ${npcNow.name}`, reason: 'cant_reach' };
@@ -4490,7 +4506,7 @@ export class BotActions {
             try {
                 await this.sdk.waitForCondition(s =>
                     s.dialog.isOpen || Boolean(s.interface?.isOpen) ||
-                    (s.player != null && s.player.animId !== -1), 2000);
+                    (s.player != null && s.player.animId !== -1), ticksToMs(this.sdk, 20));
                 return { success: true, message: `Interacted with ${npcNow.name}` };
             } catch {
                 return { success: false, message: `Nothing happened interacting with ${npcNow.name}`, reason: 'timeout' };
@@ -4581,7 +4597,7 @@ export class BotActions {
                 if (!attemptAcked && state.tick - lastMoveTick >= PICKPOCKET_ACK_TICKS) return true;
 
                 return false;
-            }, 10000);
+            }, ticksToMs(this.sdk, 100));
 
             const thievingAfter = this.sdk.getSkill('Thieving')?.experience || 0;
             const xpGained = thievingAfter - thievingBefore;
@@ -4787,7 +4803,7 @@ export class BotActions {
      * @param options.barPattern - Regex to find the bar (default: /gold bar/i)
      * @param options.product - Product type: 'ring', 'necklace', or 'amulet' (default: auto-detect from mould)
      * @param options.gem - Gem type: 'sapphire', 'emerald', 'ruby', 'diamond', or 'gold'/'plain' for no gem (default: auto-detect from inventory)
-     * @param options.timeout - Max wait time in ms (default: 10000)
+     * @param options.timeout - Max wait time in ms (default: 100 game ticks, 10 s at 100 ms/tick)
      *
      * @example
      * ```ts
@@ -4807,7 +4823,7 @@ export class BotActions {
         gem?: string;
         timeout?: number;
     } = {}): Promise<CraftJewelryResult> {
-        const { barPattern = /gold bar/i, timeout = 10000 } = options;
+        const { barPattern = /gold bar/i, timeout = ticksToMs(this.sdk, 100) } = options;
 
         await this.dismissBlockingUI();
 
@@ -4881,7 +4897,7 @@ export class BotActions {
         try {
             await this.sdk.waitForCondition(
                 s => s.interface?.isOpen && s.interface.interfaceId === 4161,
-                5000
+                ticksToMs(this.sdk, 50)
             );
         } catch {
             return { success: false, message: 'Jewelry crafting interface did not open', reason: 'interface_not_opened' };
@@ -4952,7 +4968,7 @@ export class BotActions {
      *
      * @param target - Item to enchant (InventoryItem, name string, or regex)
      * @param level - Enchantment level 1-5 (1=Sapphire, 2=Emerald, 3=Ruby, 4=Diamond, 5=Dragonstone)
-     * @param options.timeout - Max wait time in ms (default: 5000)
+     * @param options.timeout - Max wait time in ms (default: 50 game ticks, 5 s at 100 ms/tick)
      *
      * @example
      * ```ts
@@ -4968,7 +4984,7 @@ export class BotActions {
         level: 1 | 2 | 3 | 4 | 5,
         options: { timeout?: number } = {}
     ): Promise<EnchantResult> {
-        const { timeout = 5000 } = options;
+        const { timeout = ticksToMs(this.sdk, 50) } = options;
 
         await this.dismissBlockingUI();
 
@@ -5057,7 +5073,7 @@ export class BotActions {
      * String an amulet using a ball of wool.
      *
      * @param target - Unstrung amulet (InventoryItem, name string, or regex). Default: /amulet/i
-     * @param options.timeout - Max wait time in ms (default: 5000)
+     * @param options.timeout - Max wait time in ms (default: 50 game ticks, 5 s at 100 ms/tick)
      *
      * @example
      * ```ts
@@ -5072,7 +5088,7 @@ export class BotActions {
         target: InventoryItem | string | RegExp = /amulet/i,
         options: { timeout?: number } = {}
     ): Promise<StringAmuletResult> {
-        const { timeout = 5000 } = options;
+        const { timeout = ticksToMs(this.sdk, 50) } = options;
 
         await this.dismissBlockingUI();
 
