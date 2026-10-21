@@ -46,7 +46,7 @@
 | `async useItemOnNpc(item: InventoryItem \| string \| RegExp, npc: NearbyNpc \| string \| RegExp, options: { timeout?: number } = {}): Promise<UseItemOnNpcResult>` | Use an inventory item on a nearby NPC (e.g., bones on altar keeper, item on NPC). Walks to the NPC first (handling doors), then uses the item. |
 | `async dropItem(target: InventoryItem \| string \| RegExp, amount: number \| 'all' = 'all'): Promise<DropItemResult>` | Drop inventory items by name, waiting for each drop to land before sending the next. `sendDropItem` on a slot the server has already emptied silently no-ops, so slot loops built on stale state lose most of their sends; this re-resolves the slot from fresh state every time. `amount` counts inventory slots (a whole stack drops as one). Pass `'all'` or `-1` to drop every matching slot. |
 | `async closeInterface(timeout: number = 5000): Promise<ActionResult>` | Close any open modal interface (bank, book, quest scroll, etc.). |
-| `async setCombatStyle(target: CombatStyleTarget, timeout: number = 3000): Promise<SetCombatStyleResult>` | Select a combat style and wait until the server has applied it. Takes a style index, or the skill to train: `{ trains: 'Strength' }` picks the style that trains only Strength (aggressive), falling back to one that trains it among others (controlled) when the weapon has no such style. Indices depend on the weapon (index 2 is aggressive on a stabsword but controlled on a scimitar), so the skill form is resolved from `state.combatStyle.styles`, never assumed. ```ts const result = await bot.setCombatStyle({ trains: 'Defence' }); if (!result.success) console.log(result.reason, result.message); ``` Confirmation is `state.combatStyle.currentStyle` (varp 43, com_mode) reaching the index. The server ignores the click while the player is busy and only resyncs the varp, so a click that changed nothing comes back as `reason: 'not_applied'`. com_mode is not saved: it is back to 0 after every login, so set it again then. com_mode reads 0 until the server sends it, so an index-0 request is always clicked rather than trusted as already selected. |
+| `async setCombatStyle(target: CombatStyleTarget, timeout?: number): Promise<SetCombatStyleResult>` | Select a combat style and wait until the server has applied it. Takes a style index, or the skill to train: `{ trains: 'Strength' }` picks the style that trains only Strength (aggressive), falling back to one that trains it among others (controlled) when the weapon has no such style. Indices depend on the weapon (index 2 is aggressive on a stabsword but controlled on a scimitar), so the skill form is resolved from `state.combatStyle.styles`, never assumed. ```ts const result = await bot.setCombatStyle({ trains: 'Defence' }); if (!result.success) console.log(result.reason, result.message); ``` Confirmation is `state.combatStyle.currentStyle` (varp 43, com_mode) reaching the index. The server ignores the click while the player is busy and only resyncs the varp, so a click that changed nothing comes back as `reason: 'not_applied'`. com_mode is not saved: it is back to 0 after every login, so set it again then. com_mode reads 0 until the server sends it, so an index-0 request is always clicked rather than trusted as already selected. `timeout` is in ms; by default 30 game ticks. |
 
 ### Woodcutting & Firemaking
 
@@ -66,15 +66,15 @@
 | Signature | Description |
 |---|---|
 | `async talkTo(target: NearbyNpc \| string \| RegExp): Promise<TalkResult>` | Talk to an NPC and wait for dialog to open. Walks to the NPC first (handling doors). |
-| `async interactLoc(target: NearbyLoc \| string \| RegExp, option: number \| string \| RegExp = 1): Promise<InteractLocResult>` | Interact with a nearby location object (rock, fishing spot, furnace, etc.). Walks to the target first (handling doors), sends the interaction, then waits for an effect (animation, dialog, interface) or detects failure when the player has been idle for 2 ticks with nothing happening. Success can mean the action started, before its product arrives; use mineRock for completed mining. |
-| `async interactNpc(target: NearbyNpc \| string \| RegExp, option: number \| string \| RegExp = 1): Promise<InteractNpcResult>` | Interact with a nearby NPC using a specified option (e.g. "Trade", "Pickpocket", "Fish"). Walks to the NPC first (handling doors), sends the interaction, then waits for an effect (animation, dialog, interface) or detects failure when the player has been idle for 2 ticks with nothing happening. |
+| `async interactLoc(target: NearbyLoc \| string \| RegExp, option: number \| string \| RegExp = 1): Promise<InteractLocResult>` | Interact with a nearby location object (rock, fishing spot, furnace, etc.). Walks to the target first (handling doors), sends the interaction, then waits for an effect produced after the click (an animation starting, a dialog or interface opening, XP or an item gained, the loc changing) or detects failure when the player has been idle for 2 ticks with nothing happening. An animation left over from the previous action does not count. Success can mean the action started, before its product arrives; use mineRock for completed mining. |
+| `async interactNpc(target: NearbyNpc \| string \| RegExp, option: number \| string \| RegExp = 1): Promise<InteractNpcResult>` | Interact with a nearby NPC using a specified option (e.g. "Trade", "Pickpocket", "Fish"). Walks to the NPC first (handling doors), sends the interaction, then waits for an effect produced after the click (an animation starting, a dialog or interface opening, XP or an item gained) or detects failure when the player has been idle for 2 ticks with nothing happening. An animation left over from the previous action does not count. |
 | `async pickpocketNpc(target: NearbyNpc \| string \| RegExp): Promise<PickpocketResult>` | Pickpocket an NPC. Handles door retrying if path is blocked. |
 
 ### Movement
 
 | Signature | Description |
 |---|---|
-| `async walkTo(x: number, z: number, tolerance: number = 3, options: { timeout?: number } = {}): Promise<ActionResult>` | Walk to coordinates using pathfinding, auto-opening doors. Bounds the whole route with options.timeout (default 120s), refuses stale state, and aborts on cancellation or death. |
+| `async walkTo(x: number, z: number, tolerance: number = 3, options: { timeout?: number; timeoutTicks?: number } = {}): Promise<ActionResult>` | Walk to coordinates using pathfinding, auto-opening doors. Bounds the whole route with options.timeout in ms, else options.timeoutTicks game ticks (default 1200: 120 s at 100 ms/tick, 360 s at 300 ms/tick). Refuses stale state and aborts on cancellation or death. |
 
 ### Shopping
 
@@ -114,10 +114,10 @@
 | `getEquipment(): InventoryItem[]` | Get all currently equipped items. |
 | `findEquippedItem(pattern: string \| RegExp): InventoryItem \| null` | Find an equipped item by name pattern. |
 | `async eatFood(target?: InventoryItem \| string \| RegExp): Promise<EatResult>` | Eat food to restore hitpoints. With no target, eats the first inventory item that offers Eat. |
-| `async attack(target: CombatTarget, timeout: number = 5000): Promise<AttackResult>` | Attack an NPC or another player, walking to the target if needed. Takes either an entity (from `sdk.findNearbyNpc`/`sdk.findNearbyPlayer`) or a name/pattern, matched against NPCs first and players second - so pass the entity when a player shares a name with a monster. ```ts await bot.attack(/^chicken$/i); await bot.attack(sdk.findNearbyPlayer('Zezima')!); ``` PvP attacks are refused outside the wilderness and across too big a level gap; those come back as `reason: 'not_attackable'` with the server's own wording in `message`. |
-| `async attackPlayer(target: NearbyPlayer \| string \| RegExp, timeout: number = 5000): Promise<AttackResult>` | Attack another player (OPPLAYER2). Prefer {@link attack}, which also takes NPCs. |
-| `async castSpell(target: CombatTarget, spellComponent: number \| string, timeout: number = 3000): Promise<CastSpellResult>` | Cast a combat spell on an NPC or another player. The two are the same action to the server (OPNPCT vs OPPLAYERT), so this takes either: an entity from `sdk.findNearbyNpc`/`sdk.findNearbyPlayer`, or a name/pattern matched against NPCs first and players second. ```ts await bot.castSpell('goblin', Spells.WIND_STRIKE); await bot.castSpell(sdk.findNearbyPlayer('Zezima')!, Spells.FIRE_STRIKE); ``` Magic XP is the evidence of a cast landing, so a splash still counts as success with `hit: false`. |
-| `async castSpellOnPlayer(target: NearbyPlayer \| string \| RegExp, spellComponent: number \| string, timeout: number = 3000): Promise<CastSpellResult>` | Cast a combat spell on another player (OPPLAYERT). Prefer {@link castSpell}. |
+| `async attack(target: CombatTarget, timeout?: number): Promise<AttackResult>` | Attack an NPC or another player, walking to the target if needed. Takes either an entity (from `sdk.findNearbyNpc`/`sdk.findNearbyPlayer`) or a name/pattern, matched against NPCs first and players second - so pass the entity when a player shares a name with a monster. ```ts await bot.attack(/^chicken$/i); await bot.attack(sdk.findNearbyPlayer('Zezima')!); ``` PvP attacks are refused outside the wilderness and across too big a level gap; those come back as `reason: 'not_attackable'` with the server's own wording in `message`. `timeout` is in ms; by default 50 game ticks. |
+| `async attackPlayer(target: NearbyPlayer \| string \| RegExp, timeout?: number): Promise<AttackResult>` | Attack another player (OPPLAYER2). Prefer {@link attack}, which also takes NPCs. `timeout` is in ms; by default 50 game ticks. |
+| `async castSpell(target: CombatTarget, spellComponent: number \| string, timeout?: number): Promise<CastSpellResult>` | Cast a combat spell on an NPC or another player. The two are the same action to the server (OPNPCT vs OPPLAYERT), so this takes either: an entity from `sdk.findNearbyNpc`/`sdk.findNearbyPlayer`, or a name/pattern matched against NPCs first and players second. ```ts await bot.castSpell('goblin', Spells.WIND_STRIKE); await bot.castSpell(sdk.findNearbyPlayer('Zezima')!, Spells.FIRE_STRIKE); ``` Magic XP is the evidence of a cast landing, so a splash still counts as success with `hit: false`. `timeout` is in ms; by default 30 game ticks. |
+| `async castSpellOnPlayer(target: NearbyPlayer \| string \| RegExp, spellComponent: number \| string, timeout?: number): Promise<CastSpellResult>` | Cast a combat spell on another player (OPPLAYERT). Prefer {@link castSpell}. `timeout` is in ms; by default 30 game ticks. |
 
 ### Condition Waiting
 
@@ -133,7 +133,7 @@
 |---|---|
 | `async fletchLogs(product?: string): Promise<FletchResult>` | Fletch logs into bows or arrow shafts using a knife. `product` is matched against the dialog's visible product labels ("15 Arrow Shafts", "Oak Short Bow", ...), so 'arrow shaft', 'shortbow' and 'oak long' all resolve. Omit it to take the first product offered. One call makes one batch — 15 shafts, or one bow. |
 | `async craftLeather(product?: string): Promise<CraftLeatherResult>` | Craft leather into armour using needle and thread. |
-| `async smithAtAnvil(product: string \| number = 'dagger', options: { barPattern?: RegExp; timeout?: number } = {}): Promise<SmithResult>` | Smith a bar into an item at an anvil. |
+| `async smithAtAnvil(product: string \| number = 'dagger', options: { barPattern?: RegExp; timeout?: number; timeoutTicks?: number } = {}): Promise<SmithResult>` | Smith a bar into an item at an anvil. Success means the effect was seen: Smithing XP or a bar used up. Too few bars or too low a level fail at once (`no_bars`, `level_too_low`), read from the server's chat-box reply. A dialog that closes the anvil before anything is smithed, such as a late level-up, is dismissed and retried; `interrupted` means that kept happening. |
 | `async craftJewelry(options: { barPattern?: RegExp; product?: string; gem?: string; timeout?: number; } = {}): Promise<CraftJewelryResult>` | Craft jewelry at a furnace using a gold/silver bar and optional gem. Requires: bar + mould in inventory (ring mould, necklace mould, or amulet mould). Optionally a gem for gem-set jewelry. |
 | `async enchantItem(target: InventoryItem \| string \| RegExp, level: 1 \| 2 \| 3 \| 4 \| 5, options: { timeout?: number } = {}): Promise<EnchantResult>` | Cast an enchantment spell on a jewelry item. |
 | `async stringAmulet(target: InventoryItem \| string \| RegExp = /amulet/i, options: { timeout?: number } = {}): Promise<StringAmuletResult>` | String an amulet using a ball of wool. |
@@ -142,7 +142,7 @@
 
 | Signature | Description |
 |---|---|
-| `async mineRock(target: NearbyLoc \| string \| RegExp = /rocks?/i, options: { timeout?: number } = {}): Promise<MineRockResult>` | Mine a rock and wait for new ore plus Mining XP. Rock names have a "Rocks" prefix: use /copper ore/i for rocks and /^copper ore$/i for inventory. |
+| `async mineRock(target: NearbyLoc \| string \| RegExp = /rocks?/i, options: { timeout?: number; timeoutTicks?: number } = {}): Promise<MineRockResult>` | Mine a rock and wait for new ore plus Mining XP. Rock names have a "Rocks" prefix: use /copper ore/i for rocks and /^copper ore$/i for inventory. |
 
 ### Prayer
 
@@ -178,6 +178,7 @@
 | `getState(): BotWorldState \| null` | Get current game state snapshot. |
 | `getStateReceivedAt(): number` | Get timestamp when state was last received (ms since epoch) |
 | `getStateAge(): number` | Get age of current state in milliseconds |
+| `getTickMs(): number \| null` | Measured server tick length in ms, or null until a few ticks of state have arrived. |
 | `getChat(opts: { limit?: number; types?: readonly number[]; includeSelf?: boolean } = {}): GameMessage[]` | Read recent chat messages. Returns player chat (public + PMs) by default, newest last. Reads from the SDK's accumulated history — up to 500 messages retained since connect — so old lines survive both system spam (level-ups, combat) and the client's own 100-deep ring eviction. |
 | `getNewChat(opts: { types?: readonly number[]; includeSelf?: boolean } = {}): GameMessage[]` | Read only chat messages that have arrived since the last call (cursor-based, newest last). Repeat polls never re-show the same message — no need to hand-roll a baseline. The first call returns everything seen since connect. Excludes your own messages by default. |
 | `getChatFrom(name: string, opts: { limit?: number } = {}): GameMessage[]` | Read recent chat from a specific sender (case-insensitive, substring match on name), newest last, from the accumulated history. Handy for "what did my partner say?" without regex-matching the sender field yourself. |
@@ -217,6 +218,7 @@
 |---|---|
 | `async checkBotStatus(): Promise<BotStatus>` | Check bot status via gateway HTTP endpoint. Returns info about whether bot is connected and who else is controlling/observing. |
 | `async launchBrowser(): Promise<void>` | Launch native browser to client URL. Uses the `open` package for cross-platform support (macOS, Windows, Linux, WSL). Falls back to printing the URL if no browser can be opened. |
+| `ticksToMs(ticks: number): number` | Wall-clock ms for `ticks` game ticks at the measured tick rate, never less than at 100 ms/tick. BotActions sizes its default timeouts with this, so a 300 ms server gets the same number of ticks as a 100 ms one. |
 | `countInventoryItems(pattern: string \| RegExp): number` | Count total item quantity matching a name pattern. This sums stack sizes across every matching slot. Use `getInventory().filter(...)` when the number of occupied slots is needed. |
 | `async clickInterfaceOption(selector: InterfaceOptionSelector): Promise<ActionResult>` | Click exactly one interface option, selected by its state object or by visible text (substring for strings, match for regexes). This dispatches the option's `componentId` and never interprets `InterfaceOption.index` as an array position. |
 | `async dm(targetName: string, text: string, opts: { maxLen?: number; delayTicks?: number } = {}): Promise<ActionResult[]>` | Send a private message of any length, auto-split into chunks like {@link say}. Returns one ActionResult per chunk. |
@@ -355,6 +357,8 @@ interface PlayerState {
   animId: number;
   /** Current spot animation ID (-1 = none) */
   spotanimId: number;
+  /** Public game tick when an animation last started or restarted (null before any). animId alone can't tell a fresh action from the previous one's animation still playing; this moves each time the server sends one. Absent on older clients. */
+  animStartTick?: number | null;
   /** Combat state tracking */
   combat: PlayerCombatState;
   /** True while the player's hitpoints are zero. */
@@ -806,7 +810,7 @@ interface SmithResult {
   xpGained?: number;
   itemsSmithed?: number;
   product?: InventoryItem;
-  reason?: 'no_hammer' | 'no_bars' | 'no_anvil' | 'cant_reach' | 'interface_not_opened' | 'level_too_low' | 'unknown_product' | 'timeout' | 'no_xp_gained';
+  reason?: 'no_hammer' | 'no_bars' | 'no_anvil' | 'cant_reach' | 'interface_not_opened' | 'level_too_low' | 'unknown_product' | 'timeout' | 'no_xp_gained' | 'interrupted';
 }
 ```
 

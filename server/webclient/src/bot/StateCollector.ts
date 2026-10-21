@@ -101,6 +101,8 @@ export class BotStateCollector implements ScanProvider {
     private lifeId: number = 0;
     private respawnCount: number = 0;
     private lastDeathTick: number | null = null;
+    private lastAnimStarts: number = 0;
+    private animStartTick: number | null = null;
 
     private lastFaceEntity: number | null = null;
     private faceEntitySetCycle: number = Number.NEGATIVE_INFINITY;
@@ -330,8 +332,8 @@ export class BotStateCollector implements ScanProvider {
         const isOpen = c.chatModalId !== -1;
         const isWaiting = c.resumedPauseButton || false;
 
-        // Capture dialog to history when open
-        if (isOpen && typeof this.client.captureDialogToHistory === 'function') {
+        // Capture dialog to history (a closed modal re-arms the capture)
+        if (typeof this.client.captureDialogToHistory === 'function') {
             this.client.captureDialogToHistory();
         }
 
@@ -548,6 +550,16 @@ export class BotStateCollector implements ScanProvider {
         }
     }
 
+    /**
+     * Turn the local player's anim-start counter into the tick it last moved.
+     * A counter that drops (a new local player object) is a reset, not a start.
+     */
+    private trackAnimStart(starts: number, currentTick: number): number | null {
+        if (starts > this.lastAnimStarts) this.animStartTick = currentTick;
+        this.lastAnimStarts = starts;
+        return this.animStartTick;
+    }
+
     private collectPlayerState(currentTick: number, clientCycle: number): PlayerState | null {
         const c = this.client as any;
         const player = c.localPlayer;
@@ -620,6 +632,7 @@ export class BotStateCollector implements ScanProvider {
             runWeight: c.runweight || 0,
             animId: player.primaryAnim ?? -1,
             spotanimId: player.spotanimId ?? -1,
+            animStartTick: this.trackAnimStart(player.primaryAnimStarts ?? 0, currentTick),
             combat: {
                 inCombat,
                 targetIndex: target.index,

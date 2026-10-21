@@ -3,6 +3,7 @@
 
 import { BotSDK } from './index';
 import { executionWait } from './execution-context';
+import { ticksToMs } from './tick-clock';
 import { shortestNameMatch } from './action-quantity';
 import type {
     NearbyLoc,
@@ -48,6 +49,18 @@ export const NO_RUNES_REFUSALS = [
     'do not have enough',
     "don't have enough"
 ] as const;
+
+/** What was already showing when an interaction was sent. */
+export interface InteractionBaseline {
+    tick: number;
+    animId: number;
+    /** Older clients only: the player has been idle since the baseline. */
+    sawIdle: boolean;
+    dialogPage: string | null;
+    interfaceId: number | null;
+    xp: number;
+    items: Map<number, number>;
+}
 
 export class ActionHelpers {
     constructor(private sdk: BotSDK) {}
@@ -191,6 +204,76 @@ export class ActionHelpers {
     /** True when a message was published after a cursor from getMessageTick(). */
     isMessageAfter(message: { tick: number; observationId?: number }, cursor: number): boolean {
         return (message.observationId ?? message.tick) > cursor;
+    }
+
+    /**
+     * Cursor over recentDialogs, the counterpart of getMessageTick(). Chat-box
+     * text (mesbox, level-ups) is never a game message, so a failure the
+     * server reports that way is only visible here.
+     */
+    getDialogCursor(): number {
+        let max = 0;
+        for (const entry of this.sdk.getState()?.recentDialogs ?? []) {
+            const cursor = entry.observationId ?? entry.tick;
+            if (cursor > max) max = cursor;
+        }
+        return max;
+    }
+
+    /** Lower-cased text of each dialog captured after a getDialogCursor() cursor, newest first. */
+    dialogTextsSince(cursor: number, state: BotWorldState | null = this.sdk.getState()): string[] {
+        return (state?.recentDialogs ?? [])
+            .filter(entry => this.isMessageAfter(entry, cursor))
+            .map(entry => entry.text.join(' ').toLowerCase());
+    }
+
+    // ============ Interaction Evidence ============
+
+    /** Snapshot to take just before sending an interaction; see isFreshEvidence(). */
+    interactionBaseline(): InteractionBaseline {
+        const state = this.sdk.getState();
+        const items = new Map<number, number>();
+        for (const item of state?.inventory ?? []) items.set(item.id, (items.get(item.id) ?? 0) + item.count);
+        const animId = state?.player?.animId ?? -1;
+        return {
+            tick: state?.tick ?? 0,
+            animId,
+            sawIdle: animId === -1,
+            dialogPage: state?.dialog.isOpen ? (state.dialog.pageId ?? 'open') : null,
+            interfaceId: state?.interface?.isOpen ? state.interface.interfaceId : null,
+            xp: (state?.skills ?? []).reduce((sum, s) => sum + s.experience, 0),
+            items,
+        };
+    }
+
+    /**
+     * True when the state shows something the interaction itself produced: an
+     * animation started after the baseline tick, a dialog or interface that was
+     * not already open, or XP or an item gained. The previous action's
+     * animation still playing (a felled tree read as chopping) is not evidence.
+     */
+    isFreshEvidence(base: InteractionBaseline, state: BotWorldState): boolean {
+        const player = state.player;
+        if (player) {
+            if (player.animStartTick !== undefined) {
+                if (player.animStartTick !== null && player.animStartTick > base.tick) return true;
+            } else if (player.animId === -1) {
+                // Older client without animStartTick: only an animation that
+                // was not already showing counts.
+                base.sawIdle = true;
+            } else if (base.sawIdle || player.animId !== base.animId) {
+                return true;
+            }
+        }
+        if (state.dialog.isOpen && (base.dialogPage === null || (state.dialog.pageId ?? 'open') !== base.dialogPage)) return true;
+        if (state.interface?.isOpen && state.interface.interfaceId !== base.interfaceId) return true;
+        if (state.skills.reduce((sum, s) => sum + s.experience, 0) > base.xp) return true;
+        const items = new Map<number, number>();
+        for (const item of state.inventory) items.set(item.id, (items.get(item.id) ?? 0) + item.count);
+        for (const [id, count] of items) {
+            if (count > (base.items.get(id) ?? 0)) return true;
+        }
+        return false;
     }
 
     // ============ Op Rejection ============
@@ -461,7 +544,7 @@ export class ActionHelpers {
                     );
                     if (!doorNow) return true; // Door gone = opened
                     return !doorNow.optionsWithIndex.some(o => /^open$/i.test(o.text));
-                }, 8000);
+                }, ticksToMs(this.sdk, 80));
 
                 if (failReason) return failReason;
 

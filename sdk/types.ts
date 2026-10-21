@@ -39,6 +39,13 @@ export interface PlayerState {
     animId: number;
     /** Current spot animation ID (-1 = none) */
     spotanimId: number;
+    /**
+     * Public game tick when an animation last started or restarted (null before
+     * any). animId alone can't tell a fresh action from the previous one's
+     * animation still playing; this moves each time the server sends one.
+     * Absent on older clients.
+     */
+    animStartTick?: number | null;
     /** Combat state tracking */
     combat: PlayerCombatState;
     /** True while the player's hitpoints are zero. */
@@ -898,7 +905,7 @@ export interface SmithResult {
     xpGained?: number;
     itemsSmithed?: number;
     product?: InventoryItem;
-    reason?: 'no_hammer' | 'no_bars' | 'no_anvil' | 'cant_reach' | 'interface_not_opened' | 'level_too_low' | 'unknown_product' | 'timeout' | 'no_xp_gained';
+    reason?: 'no_hammer' | 'no_bars' | 'no_anvil' | 'cant_reach' | 'interface_not_opened' | 'level_too_low' | 'unknown_product' | 'timeout' | 'no_xp_gained' | 'interrupted';
 }
 
 export interface OpenBankResult {

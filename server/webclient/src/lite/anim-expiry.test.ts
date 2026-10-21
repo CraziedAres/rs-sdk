@@ -217,3 +217,25 @@ describe('animation expiry', () => {
         expect(c.localPlayer!.primaryAnim).toBe(-1);
     });
 });
+
+// animId alone can't tell a fresh action from the previous one still playing,
+// so StateCollector publishes when the server last (re)sent an animation.
+describe('animation starts', () => {
+    test('every start or re-send counts, a stop or a lost priority contest does not', () => {
+        defineSeq(SEQ_LOOP, [2, 2], { loops: 1, maxloops: 99 });
+        defineSeq(SEQ_ONESHOT, [3, 3]);
+        SeqType.list[SEQ_LOOP].priority = 5;
+        SeqType.list[SEQ_ONESHOT].priority = 1;
+        const npc = new ClientNpc();
+
+        applyAnimMask(npc, SEQ_LOOP, 0);
+        expect(npc.primaryAnimStarts).toBe(1);
+        applyAnimMask(npc, SEQ_LOOP, 0); // same anim re-sent while still playing
+        expect(npc.primaryAnimStarts).toBe(2);
+        applyAnimMask(npc, SEQ_ONESHOT, 0); // lower priority: not shown
+        expect(npc.primaryAnim).toBe(SEQ_LOOP);
+        expect(npc.primaryAnimStarts).toBe(2);
+        applyAnimMask(npc, -1, 0);
+        expect(npc.primaryAnimStarts).toBe(2);
+    });
+});

@@ -164,6 +164,7 @@ interface PendingScreenshot {
 // importing the full SDK; re-exported here for existing consumers and tests.
 export { chunkMessage } from './chunking';
 import { chunkMessage } from './chunking';
+import { REFERENCE_TICK_MS, TickClock } from './tick-clock';
 export { Spells, type SpellName } from './spells';
 
 export class BotSDK {
@@ -171,6 +172,8 @@ export class BotSDK {
     private ws: WebSocket | null = null;
     private state: BotWorldState | null = null;
     private stateReceivedAt: number = 0;
+    /** Measures the server tick from incoming state; see ticksToMs(). */
+    private tickClock = new TickClock();
     /**
      * Server-configured max chat length, learned from the gateway handshake
      * (sdk_connected / sdk_info). Defaults to the RS wire limit until known.
@@ -719,6 +722,21 @@ export class BotSDK {
     getStateAge(): number {
         if (this.stateReceivedAt === 0) return 0;
         return Date.now() - this.stateReceivedAt;
+    }
+
+    /** Measured server tick length in ms, or null until a few ticks of state have arrived. */
+    getTickMs(): number | null {
+        // Optional: an Object.create(BotSDK.prototype) test stand-in has no fields.
+        return this.tickClock?.msPerTick() ?? null;
+    }
+
+    /**
+     * Wall-clock ms for `ticks` game ticks at the measured tick rate, never less
+     * than at 100 ms/tick. BotActions sizes its default timeouts with this, so a
+     * 300 ms server gets the same number of ticks as a 100 ms one.
+     */
+    ticksToMs(ticks: number): number {
+        return this.tickClock?.toMs(ticks) ?? ticks * REFERENCE_TICK_MS;
     }
 
     /**
@@ -2014,6 +2032,7 @@ export class BotSDK {
             this.state = message.state;
             // Use server timestamp if available, otherwise use local time
             this.stateReceivedAt = message.stateReceivedAt || Date.now();
+            this.tickClock.observe(message.state.tick, this.stateReceivedAt);
             for (const listener of this.stateListeners) {
                 try {
                     listener(message.state);
