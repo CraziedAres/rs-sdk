@@ -3848,51 +3848,58 @@ export class BotActions {
         'runite': /^runite bar$/i,
     };
 
-    private static readonly SMITHING_COMPONENTS: Record<string, { component: number; slot: number }> = {
+    // `bars` is the server's per-product bar cost (the same for every metal).
+    private static readonly SMITHING_COMPONENTS: Record<string, { component: number; slot: number; bars: number }> = {
         // Column 1 - Bladed weapons
-        'dagger': { component: 1119, slot: 0 },
-        'sword': { component: 1119, slot: 1 },
-        'scimitar': { component: 1119, slot: 2 },
-        'longsword': { component: 1119, slot: 3 },
-        'long sword': { component: 1119, slot: 3 },
-        '2h sword': { component: 1119, slot: 4 },
-        'two-handed sword': { component: 1119, slot: 4 },
+        'dagger': { component: 1119, slot: 0, bars: 1 },
+        'sword': { component: 1119, slot: 1, bars: 1 },
+        'scimitar': { component: 1119, slot: 2, bars: 2 },
+        'longsword': { component: 1119, slot: 3, bars: 2 },
+        'long sword': { component: 1119, slot: 3, bars: 2 },
+        '2h sword': { component: 1119, slot: 4, bars: 3 },
+        'two-handed sword': { component: 1119, slot: 4, bars: 3 },
         // Column 2 - Blunt/axe weapons
-        'axe': { component: 1120, slot: 0 },
-        'mace': { component: 1120, slot: 1 },
-        'warhammer': { component: 1120, slot: 2 },
-        'war hammer': { component: 1120, slot: 2 },
-        'battleaxe': { component: 1120, slot: 3 },
-        'battle axe': { component: 1120, slot: 3 },
+        'axe': { component: 1120, slot: 0, bars: 1 },
+        'mace': { component: 1120, slot: 1, bars: 1 },
+        'warhammer': { component: 1120, slot: 2, bars: 3 },
+        'war hammer': { component: 1120, slot: 2, bars: 3 },
+        'battleaxe': { component: 1120, slot: 3, bars: 3 },
+        'battle axe': { component: 1120, slot: 3, bars: 3 },
         // Column 3 - Armour
-        'chainbody': { component: 1121, slot: 0 },
-        'chain body': { component: 1121, slot: 0 },
-        'platelegs': { component: 1121, slot: 1 },
-        'plate legs': { component: 1121, slot: 1 },
-        'plateskirt': { component: 1121, slot: 2 },
-        'plate skirt': { component: 1121, slot: 2 },
-        'platebody': { component: 1121, slot: 3 },
-        'plate body': { component: 1121, slot: 3 },
+        'chainbody': { component: 1121, slot: 0, bars: 3 },
+        'chain body': { component: 1121, slot: 0, bars: 3 },
+        'platelegs': { component: 1121, slot: 1, bars: 3 },
+        'plate legs': { component: 1121, slot: 1, bars: 3 },
+        'plateskirt': { component: 1121, slot: 2, bars: 3 },
+        'plate skirt': { component: 1121, slot: 2, bars: 3 },
+        'platebody': { component: 1121, slot: 3, bars: 5 },
+        'plate body': { component: 1121, slot: 3, bars: 5 },
         // Column 4 - Helms/shields
-        'med helm': { component: 1122, slot: 0 },
-        'medium helm': { component: 1122, slot: 0 },
-        'full helm': { component: 1122, slot: 1 },
-        'sq shield': { component: 1122, slot: 2 },
-        'square shield': { component: 1122, slot: 2 },
-        'kiteshield': { component: 1122, slot: 3 },
-        'kite shield': { component: 1122, slot: 3 },
+        'med helm': { component: 1122, slot: 0, bars: 1 },
+        'medium helm': { component: 1122, slot: 0, bars: 1 },
+        'full helm': { component: 1122, slot: 1, bars: 2 },
+        'sq shield': { component: 1122, slot: 2, bars: 2 },
+        'square shield': { component: 1122, slot: 2, bars: 2 },
+        'kiteshield': { component: 1122, slot: 3, bars: 3 },
+        'kite shield': { component: 1122, slot: 3, bars: 3 },
         // Column 5 - Projectiles/misc
-        'dart tips': { component: 1123, slot: 0 },
-        'arrowheads': { component: 1123, slot: 1 },
-        'arrow tips': { component: 1123, slot: 1 },
-        'arrowtips': { component: 1123, slot: 1 },
-        'throwing knives': { component: 1123, slot: 2 },
-        'knives': { component: 1123, slot: 2 },
-        'nails': { component: 1123, slot: 3 },
+        'dart tips': { component: 1123, slot: 0, bars: 1 },
+        'arrowheads': { component: 1123, slot: 1, bars: 1 },
+        'arrow tips': { component: 1123, slot: 1, bars: 1 },
+        'arrowtips': { component: 1123, slot: 1, bars: 1 },
+        'throwing knives': { component: 1123, slot: 2, bars: 1 },
+        'knives': { component: 1123, slot: 2, bars: 1 },
+        'nails': { component: 1123, slot: 3, bars: 1 },
     };
 
     /**
      * Smith a bar into an item at an anvil.
+     *
+     * Success means the effect was seen: Smithing XP or a bar used up. Too few
+     * bars or too low a level fail at once (`no_bars`, `level_too_low`), read
+     * from the server's chat-box reply. A dialog that closes the anvil before
+     * anything is smithed, such as a late level-up, is dismissed and retried;
+     * `interrupted` means that kept happening.
      *
      * @param product - The item to smith (e.g., 'dagger', 'axe', 'platebody') or component ID
      * @param options - Optional configuration
@@ -3950,6 +3957,7 @@ export class BotActions {
         // Determine component ID and slot
         let componentId: number;
         let componentSlot: number = 0;
+        let barCost: number | undefined;
         if (typeof product === 'number') {
             componentId = product;
         } else {
@@ -3962,6 +3970,7 @@ export class BotActions {
             if (directMatch) {
                 componentId = directMatch.component;
                 componentSlot = directMatch.slot;
+                barCost = directMatch.bars;
             } else {
                 // Try partial match. Prefer the LONGEST matching key:
                 // 'longsword'.includes('sword') is also true, and first-wins
@@ -3973,15 +3982,19 @@ export class BotActions {
                 if (partialMatch) {
                     componentId = partialMatch.component;
                     componentSlot = partialMatch.slot;
+                    barCost = partialMatch.bars;
                 } else {
                     return { success: false, message: `Unknown smithing product: ${product}`, reason: 'unknown_product' };
                 }
             }
         }
 
-        const smithingBefore = this.sdk.getSkill('Smithing')?.experience || 0;
-        const startTick = this.sdk.getState()?.tick || 0;
-        const msgBaseline = this.helpers.getMessageTick();
+        // Too few bars makes the server answer with a chat-box message and
+        // nothing else, which used to wait out the whole timeout. Fail first.
+        const barsHeld = countItems(this.sdk.getInventory(), bar.id);
+        if (barCost !== undefined && barsHeld < barCost) {
+            return { success: false, message: `Not enough bars: ${product} needs ${barCost}, have ${barsHeld}`, reason: 'no_bars' };
+        }
 
         // The generic product sweep below matches /axe/ against an equipped
         // "Bronze pickaxe" and reports it as the smithed item — prefer the
@@ -3994,7 +4007,71 @@ export class BotActions {
             return this.sdk.findInventoryItem(/dagger|(?<!pick)axe|mace|helm|sword|shield|body|legs|skirt|claws|knives|bolts|arrowtips|arrowheads|arrow|dart|nails/i);
         };
 
-        // Use bar on anvil
+        // A level-up dialog from the previous smith opens a few ticks after its
+        // XP, and opening it closes the anvil interface - under this call's
+        // click, or before the interface ever shows. That smiths nothing (no XP,
+        // no bar used), so it is safe to dismiss and go again.
+        const MAX_ATTEMPTS = 3;
+        let interruption = '';
+        for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+            if (attempt > 0) await this.dismissBlockingUI();
+            const outcome = await this._smithAttempt(anvil, bar.id, componentId, componentSlot, timeout, findSmithedItem);
+            if ('result' in outcome) return outcome.result;
+            interruption = outcome.interrupted;
+        }
+        return { success: false, message: `Smithing was interrupted ${MAX_ATTEMPTS} times: ${interruption}`, reason: 'interrupted' };
+    }
+
+    /**
+     * One use-bar-on-anvil, click, wait. Success is the effect itself - Smithing
+     * XP or a bar used up. Returns `interrupted` only when a dialog or a closed
+     * interface left nothing smithed.
+     */
+    private async _smithAttempt(
+        anvil: NearbyLoc,
+        barId: number,
+        componentId: number,
+        componentSlot: number,
+        timeout: number,
+        findSmithedItem: () => InventoryItem | null,
+    ): Promise<{ result: SmithResult } | { interrupted: string }> {
+        const bar = this.sdk.getInventory().find(i => i.id === barId);
+        if (!bar) return { result: { success: false, message: 'No bars in inventory', reason: 'no_bars' } };
+
+        type State = NonNullable<ReturnType<BotSDK['getState']>>;
+        const xpOf = (s: State) => s.skills.find(sk => sk.name === 'Smithing')?.experience || 0;
+        const xpBefore = this.sdk.getSkill('Smithing')?.experience || 0;
+        const barsBefore = countItems(this.sdk.getInventory(), barId);
+        const msgBaseline = this.helpers.getMessageTick();
+        const dialogCursor = this.helpers.getDialogCursor();
+
+        const smithed = (s: State) => xpOf(s) > xpBefore || countItems(s.inventory, barId) < barsBefore;
+        const succeeded = (s: State): { result: SmithResult } => ({
+            result: {
+                success: true,
+                message: 'Smithed item successfully',
+                xpGained: xpOf(s) - xpBefore,
+                itemsSmithed: 1,
+                product: findSmithedItem() || undefined
+            }
+        });
+        // The server reports these as chat-box dialogs (mesbox), not game
+        // messages; check both.
+        const refusal = (s: State): SmithResult | null => {
+            const texts = [
+                ...this.helpers.dialogTextsSince(dialogCursor, s),
+                ...s.gameMessages.filter(m => this.helpers.isMessageAfter(m, msgBaseline)).map(m => m.text.toLowerCase())
+            ];
+            for (const text of texts) {
+                if (text.includes("don't have enough")) return { success: false, message: 'Not enough bars', reason: 'no_bars' };
+                // Not bare "smithing level": a level-up says "advanced a Smithing level".
+                if (text.includes('need a smithing level')) return { success: false, message: 'Smithing level too low', reason: 'level_too_low' };
+                if (text.includes('need a hammer')) return { success: false, message: 'No hammer in inventory', reason: 'no_hammer' };
+            }
+            return null;
+        };
+        const dialogText = (s: State) => this.helpers.dialogTextsSince(dialogCursor, s)[0] ?? 'a dialog opened';
+
         const useResult = await this.sdk.sendUseItemOnLoc(bar.slot, anvil.x, anvil.z, anvil.id);
         if (!useResult.success) {
             // Propagate the real failure: a routing cant_reach is not a missing
@@ -4004,94 +4081,54 @@ export class BotActions {
                 : useResult.reason === 'item_not_found' ? 'no_bars'
                 : useResult.reason === 'timeout' ? 'timeout'
                 : 'no_anvil';
-            return { success: false, message: useResult.message, reason };
+            return { result: { success: false, message: useResult.message, reason } };
         }
 
-        // Wait for smithing interface to open
+        const anvilOpen = (s: State) => Boolean(s.interface?.isOpen && s.interface.interfaceId === 994);
+        let opened: State;
         try {
-            await this.sdk.waitForCondition(
-                s => s.interface?.isOpen && s.interface.interfaceId === 994,
+            opened = await this.sdk.waitForCondition(
+                s => anvilOpen(s) || smithed(s) || refusal(s) !== null || s.dialog.isOpen,
                 5000
             );
-            
         } catch {
-            return { success: false, message: 'Smithing interface did not open', reason: 'interface_not_opened' };
+            const s = this.sdk.getState();
+            const refused = s ? refusal(s) : null;
+            if (refused) return { result: refused };
+            return { result: { success: false, message: 'Smithing interface did not open', reason: 'interface_not_opened' } };
         }
+        if (smithed(opened)) return succeeded(opened);
+        const refusedEarly = refusal(opened);
+        if (refusedEarly) return { result: refusedEarly };
+        if (!anvilOpen(opened)) return { interrupted: dialogText(opened) };
 
         // Click the smithing component (uses INV_BUTTON)
+        const clickTick = this.sdk.getState()?.tick ?? 0;
         const clickResult = await this.sdk.sendClickComponentWithOption(componentId, 1, componentSlot);
         if (!clickResult.success) {
-            return { success: false, message: 'Failed to click smithing option', reason: 'interface_not_opened' };
+            return { result: { success: false, message: 'Failed to click smithing option', reason: 'interface_not_opened' } };
         }
 
-        // Wait for XP gain or timeout
-        const startTime = Date.now();
-        while (Date.now() - startTime < timeout) {
-            const state = this.sdk.getState();
-            if (!state) {
-                await this.sdk.waitForTicks(1);
-                continue;
-            }
-
-            // Check for XP gain
-            const currentXp = state.skills.find(s => s.name === 'Smithing')?.experience || 0;
-            if (currentXp > smithingBefore) {
-                // Find the smithed item
-                const smithedItem = findSmithedItem();
-                return {
-                    success: true,
-                    message: 'Smithed item successfully',
-                    xpGained: currentXp - smithingBefore,
-                    itemsSmithed: 1,
-                    product: smithedItem || undefined
-                };
-            }
-
-            // Check for failure messages
-            for (const msg of state.gameMessages) {
-                if (this.helpers.isMessageAfter(msg, msgBaseline)) {
-                    const text = msg.text.toLowerCase();
-                    if (text.includes("need a smithing level") || text.includes("level to")) {
-                        return { success: false, message: 'Smithing level too low', reason: 'level_too_low' };
-                    }
-                    if (text.includes("don't have enough")) {
-                        return { success: false, message: 'Not enough bars', reason: 'no_bars' };
-                    }
-                }
-            }
-
-            // If interface closed without XP, might need to retry
-            if (!state.interface?.isOpen) {
-                const finalXp = this.sdk.getSkill('Smithing')?.experience || 0;
-                if (finalXp > smithingBefore) {
-                    const smithedItem = findSmithedItem();
-                    return {
-                        success: true,
-                        message: 'Smithed item successfully',
-                        xpGained: finalXp - smithingBefore,
-                        itemsSmithed: 1,
-                        product: smithedItem || undefined
-                    };
-                }
-            }
-
-            await this.sdk.waitForTicks(1);
+        // XP and the bar removal land together a tick or two after the click.
+        // A dialog, or the interface gone with no smithing animation for a few
+        // ticks, means the click never ran.
+        const NOTHING_HAPPENED_TICKS = 5;
+        const clickLost = (s: State) =>
+            s.dialog.isOpen ||
+            (!anvilOpen(s) && s.tick - clickTick >= NOTHING_HAPPENED_TICKS && (s.player?.animId ?? -1) === -1);
+        try {
+            const s = await this.sdk.waitForCondition(s => smithed(s) || refusal(s) !== null || clickLost(s), timeout);
+            if (smithed(s)) return succeeded(s);
+            const refused = refusal(s);
+            if (refused) return { result: refused };
+            return { interrupted: s.dialog.isOpen ? dialogText(s) : 'the anvil interface closed without smithing' };
+        } catch {
+            const s = this.sdk.getState();
+            if (s && smithed(s)) return succeeded(s);
+            const refused = s ? refusal(s) : null;
+            if (refused) return { result: refused };
+            return { result: { success: false, message: 'Smithing timed out', reason: 'timeout' } };
         }
-
-        // Final XP check
-        const finalXp = this.sdk.getSkill('Smithing')?.experience || 0;
-        if (finalXp > smithingBefore) {
-            const smithedItem = this.sdk.findInventoryItem(/dagger|axe|mace|helm|sword|shield|body|legs|skirt|claws|knives|bolts|arrowtips|arrowheads|arrow|dart/i);
-            return {
-                success: true,
-                message: 'Smithed item successfully',
-                xpGained: finalXp - smithingBefore,
-                itemsSmithed: 1,
-                product: smithedItem || undefined
-            };
-        }
-
-        return { success: false, message: 'Smithing timed out', reason: 'timeout' };
     }
 
     // ============ Porcelain: Generic Interactions ============

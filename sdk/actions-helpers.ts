@@ -193,6 +193,27 @@ export class ActionHelpers {
         return (message.observationId ?? message.tick) > cursor;
     }
 
+    /**
+     * Cursor over recentDialogs, the counterpart of getMessageTick(). Chat-box
+     * text (mesbox, level-ups) is never a game message, so a failure the
+     * server reports that way is only visible here.
+     */
+    getDialogCursor(): number {
+        let max = 0;
+        for (const entry of this.sdk.getState()?.recentDialogs ?? []) {
+            const cursor = entry.observationId ?? entry.tick;
+            if (cursor > max) max = cursor;
+        }
+        return max;
+    }
+
+    /** Lower-cased text of each dialog captured after a getDialogCursor() cursor, newest first. */
+    dialogTextsSince(cursor: number, state: BotWorldState | null = this.sdk.getState()): string[] {
+        return (state?.recentDialogs ?? [])
+            .filter(entry => this.isMessageAfter(entry, cursor))
+            .map(entry => entry.text.join(' ').toLowerCase());
+    }
+
     // ============ Op Rejection ============
 
     /**

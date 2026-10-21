@@ -330,8 +330,8 @@ export class BotStateCollector implements ScanProvider {
         const isOpen = c.chatModalId !== -1;
         const isWaiting = c.resumedPauseButton || false;
 
-        // Capture dialog to history when open
-        if (isOpen && typeof this.client.captureDialogToHistory === 'function') {
+        // Capture dialog to history (a closed modal re-arms the capture)
+        if (typeof this.client.captureDialogToHistory === 'function') {
             this.client.captureDialogToHistory();
         }
 

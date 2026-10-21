@@ -2713,7 +2713,12 @@ export class Client extends GameShell {
      * Capture the current dialog text to history
      */
     captureDialogToHistory(): void {
-        if (this.chatModalId === -1) return;
+        // Re-arm once the chat modal closes: the same interface (a mesbox, a
+        // skill's level-up) opening again is a new dialog and must be logged.
+        if (this.chatModalId === -1) {
+            this.lastCapturedDialogId = -1;
+            return;
+        }
         if (this.chatModalId === this.lastCapturedDialogId) return;
 
         const texts = this.getDialogText();

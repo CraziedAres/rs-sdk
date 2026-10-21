@@ -1086,7 +1086,13 @@ const levelExperienceTable: number[] = (() => {
 // ============================================================== dialog log
 
 export function captureDialogToHistory(c: LiteClient): void {
-    if (c.chatModalId === -1 || c.chatModalId === c.lastCapturedDialogId) {
+    // Re-arm once the chat modal closes: the same interface (a mesbox, a
+    // skill's level-up) opening again is a new dialog and must be logged.
+    if (c.chatModalId === -1) {
+        c.lastCapturedDialogId = -1;
+        return;
+    }
+    if (c.chatModalId === c.lastCapturedDialogId) {
         return;
     }
     const texts = getDialogText(c);

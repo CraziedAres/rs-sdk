@@ -898,7 +898,7 @@ export interface SmithResult {
     xpGained?: number;
     itemsSmithed?: number;
     product?: InventoryItem;
-    reason?: 'no_hammer' | 'no_bars' | 'no_anvil' | 'cant_reach' | 'interface_not_opened' | 'level_too_low' | 'unknown_product' | 'timeout' | 'no_xp_gained';
+    reason?: 'no_hammer' | 'no_bars' | 'no_anvil' | 'cant_reach' | 'interface_not_opened' | 'level_too_low' | 'unknown_product' | 'timeout' | 'no_xp_gained' | 'interrupted';
 }
 
 export interface OpenBankResult {
