@@ -494,6 +494,19 @@ export interface SetCombatStyleResult {
     reason?: 'no_combat_style_state' | 'no_such_style' | 'dispatch_failed' | 'not_applied';
 }
 
+export interface LogoutResult {
+    /** True once the session was seen to end, not merely when the button was clicked. */
+    success: boolean;
+    message: string;
+    /**
+     * `in_combat`: the server refused within 16 ticks of combat.
+     * `timeout`: the session was not seen to end in time.
+     * `not_logged_in`: no game session was attached to log out.
+     * Unset for the server's other refusals (a duel, a gnomeball pitch); `message` has its text.
+     */
+    reason?: 'in_combat' | 'timeout' | 'not_logged_in';
+}
+
 export interface CombatEvent {
     tick: number;
     /** Monotonic publication revision when this event first became agent-visible. */
