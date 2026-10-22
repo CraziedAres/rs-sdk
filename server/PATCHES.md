@@ -99,7 +99,8 @@ survival) is described in the project memory; this file is the human-readable ch
       **profile query param XSS-sanitized**), `pages/screenshots.ts`, `pages/static.ts`.
 - [ ] **World feed** (`src/web/worldfeed.ts`, rs-sdk-only): read-only `/worldfeed` WebSocket
       streaming live players/npcs for external 3D viewers (rs-world). Off unless `WORLD_FEED=true`
-      (`WORLD_FEED_TOKEN`, `WORLD_FEED_MAX_CLIENTS` in `Environment.ts`). Hooks: `isWorldFeed`
+      (`WORLD_FEED_TOKEN`, `WORLD_FEED_MAX_CLIENTS`, `WORLD_FEED_IDLE_TIMEOUT_MS` in `Environment.ts`).
+      Inactive clients expire after the configured timeout. Hooks: `isWorldFeed`
       branches in `websocket.ts` upgrade/open/message/close, and `cycleWorldFeed()` in
       `World.cycle()` between `processClientsOut()` and `processCleanup()` — it reads the per-tick
       info masks, `walkDir`/`runDir`/`tele`/`jump` and `lastTickX/Z`, so it must stay before cleanup.

@@ -72,6 +72,7 @@ type RecordJson = { full?: string | null; delta?: string | null };
 
 type Subscriber = {
     ws: ServerWebSocket<WebSocketData>;
+    lastActivityAt: number;
     x0: number;
     z0: number;
     x1: number;
@@ -120,6 +121,7 @@ export function checkWorldFeedUpgrade(url: URL): Response | undefined {
 export function onWorldFeedOpen(ws: ServerWebSocket<WebSocketData>): void {
     subscribers.set(ws, {
         ws,
+        lastActivityAt: Date.now(),
         x0: 0,
         z0: 0,
         x1: 0,
@@ -154,6 +156,11 @@ export function onWorldFeedMessage(ws: ServerWebSocket<WebSocketData>, message: 
         return;
     }
 
+    sub.lastActivityAt = Date.now();
+    if (msg.t === 'ping') {
+        return;
+    }
+
     if (msg.t === 'sub') {
         const x = toInt(msg.x);
         const z = toInt(msg.z);
@@ -174,6 +181,7 @@ export function onWorldFeedClose(ws: ServerWebSocket<WebSocketData>): void {
 }
 
 export function cycleWorldFeed(): void {
+    expireIdleSubscribers(Date.now());
     if (subscribers.size === 0) {
         return;
     }
@@ -223,6 +231,20 @@ export function cycleWorldFeed(): void {
     const elapsed = Date.now() - start;
     if (elapsed >= SLOW_FEED_MS) {
         printInfo(`World feed took ${elapsed}ms for ${subscribers.size} subscriber(s)`);
+    }
+}
+
+function expireIdleSubscribers(now: number): void {
+    const idleTimeoutMs = Environment.WORLD_FEED_IDLE_TIMEOUT_MS;
+    for (const [ws, sub] of subscribers) {
+        if (now - sub.lastActivityAt >= idleTimeoutMs) {
+            subscribers.delete(ws);
+            try {
+                ws.close(1001, 'World feed idle timeout');
+            } catch {
+                // The socket may already be closing; removing it still frees the slot.
+            }
+        }
     }
 }
 

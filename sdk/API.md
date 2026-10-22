@@ -553,6 +553,8 @@ interface OpFeedbackState {
 ```typescript
 interface BotWorldState {
   tick: number;
+  /** Version of nearby-player combat-target telemetry emitted by the Lite client. */
+  combatTargetTelemetryVersion?: number;
   /** Tick on which an updated Lite runner already emitted policy-gated KBD op2. */
   fastKbdAttackTick?: number;
   /** Prayer-on packets emitted in-process immediately before first-spawn KBD op2. */

@@ -146,6 +146,11 @@ export interface NearbyPlayer {
     distance: number;
     /** See NearbyNpc.reachable. */
     reachable?: boolean;
+    /** Current client-observed combat target. This is populated only while the
+     * target is corroborated by the entity's combat cycle. */
+    combatTargetType?: 'npc' | 'player' | 'none';
+    combatTargetIndex?: number;
+    inCombat?: boolean;
 }
 
 /**
@@ -572,6 +577,8 @@ export interface OpFeedbackState {
 
 export interface BotWorldState {
     tick: number;
+    /** Version of nearby-player combat-target telemetry emitted by the Lite client. */
+    combatTargetTelemetryVersion?: number;
     /** Tick on which an updated Lite runner already emitted policy-gated KBD op2. */
     fastKbdAttackTick?: number;
     /** Prayer-on packets emitted in-process immediately before first-spawn KBD op2. */

@@ -166,6 +166,7 @@ export class BotStateCollector implements ScanProvider {
 
         return {
             tick: currentTick,
+            combatTargetTelemetryVersion: 1,
             revision: this.publicationRevision,
             player: this.collectPlayerState(currentTick, clientCycle),
             skills: this.collectSkills(),
@@ -173,7 +174,7 @@ export class BotStateCollector implements ScanProvider {
             equipment: this.collectInventory(EQUIPMENT_INTERFACE_ID),
             combatStyle: this.collectCombatStyle(),
             nearbyNpcs: this.collectNearbyNpcs(clientCycle),
-            nearbyPlayers: this.collectNearbyPlayers(),
+            nearbyPlayers: this.collectNearbyPlayers(clientCycle),
             nearbyLocs: this.collectNearbyLocs(),
             groundItems: this.collectGroundItems(),
             gameMessages: this.collectGameMessages(currentTick, publish),
@@ -1009,7 +1010,7 @@ export class BotStateCollector implements ScanProvider {
         return npcs;
     }
 
-    private collectNearbyPlayers(): NearbyPlayer[] {
+    private collectNearbyPlayers(clientCycle: number): NearbyPlayer[] {
         const c = this.client as any;
         const players: NearbyPlayer[] = [];
         const localPlayer = c.localPlayer;
@@ -1036,6 +1037,10 @@ export class BotStateCollector implements ScanProvider {
             // Convert fine-grained local coords (128 units/tile) to world coordinates
             const playerWorldX = baseX + ((player.x || 0) >> 7);
             const playerWorldZ = baseZ + ((player.z || 0) >> 7);
+            const facing = BotStateCollector.decodeFaceEntity(player.faceEntity ?? -1);
+            const combatCycle = player.combatCycle ?? -1000;
+            const corroborated = combatCycle > clientCycle;
+            const target = corroborated ? facing : { type: 'none' as const, index: -1 };
 
             players.push({
                 kind: 'player',
@@ -1045,6 +1050,9 @@ export class BotStateCollector implements ScanProvider {
                 x: playerWorldX,
                 z: playerWorldZ,
                 distance,
+                combatTargetType: target.type,
+                combatTargetIndex: target.index,
+                inCombat: corroborated,
                 reachable: this.reachProbeReady()
                     ? this.reachProbe.canReachEntity(player.routeX?.[0] ?? (player.x || 0) >> 7, player.routeZ?.[0] ?? (player.z || 0) >> 7, 1)
                     : undefined

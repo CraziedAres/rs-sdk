@@ -98,7 +98,7 @@ function hiscoreEligible(account: HiscoreAccount | undefined): account is Hiscor
     return true;
 }
 
-async function updateHiscores(account: HiscoreAccount | undefined, player: Player, profile: string) {
+export async function updateHiscores(account: HiscoreAccount | undefined, player: Player, profile: string) {
     if (!hiscoreEligible(account)) return;
 
     const insert = [];
@@ -106,6 +106,7 @@ async function updateHiscores(account: HiscoreAccount | undefined, player: Playe
 
     let totalXp = 0;
     let totalLevel = 0;
+    let totalPlaytime = 0;
     for (let i = 0; i < player.stats.length; i++) {
         if (!PlayerStatEnabled[i]) {
             continue;
@@ -113,11 +114,15 @@ async function updateHiscores(account: HiscoreAccount | undefined, player: Playe
 
         totalXp += player.stats[i];
         totalLevel += player.baseLevels[i];
+        totalPlaytime = Math.max(totalPlaytime, player.levelPlaytime[i]);
     }
 
     // rs-sdk: playtime is the tiebreak (level desc, playtime asc), so it's only stamped when the
     // level changes - it records when the player reached that level. Restamping it on every
-    // logout pushed maxed players down the board for continuing to play.
+    // logout pushed maxed players down the board for continuing to play. The stamp is the tick
+    // of the level-up itself; saves from before that was tracked fall back to logout playtime.
+    // Total level only moves on a level-up, so it was reached at the latest stat's stamp.
+    const reachedTotal = totalPlaytime || player.playtime;
     const existing = await db.selectFrom('hiscore_large').select('type').select('level').select('value').select('playtime').where('account_id', '=', account.id).where('type', '=', 0).where('profile', '=', profile).executeTakeFirst();
     if (existing && (existing.value !== totalXp || existing.level !== totalLevel)) {
         await db
@@ -126,7 +131,7 @@ async function updateHiscores(account: HiscoreAccount | undefined, player: Playe
                 type: 0,
                 level: totalLevel,
                 value: totalXp,
-                playtime: existing.level === totalLevel ? existing.playtime : player.playtime,
+                playtime: existing.level === totalLevel ? existing.playtime : reachedTotal,
                 date: toDbDate(new Date())
             })
             .where('account_id', '=', account.id)
@@ -142,7 +147,7 @@ async function updateHiscores(account: HiscoreAccount | undefined, player: Playe
                 type: 0,
                 level: totalLevel,
                 value: totalXp,
-                playtime: player.playtime
+                playtime: reachedTotal
             })
             .execute();
     }
@@ -154,6 +159,7 @@ async function updateHiscores(account: HiscoreAccount | undefined, player: Playe
 
         if (player.baseLevels[stat] >= 15) {
             const hiscoreType = stat + 1;
+            const reached = player.levelPlaytime[stat] || player.playtime;
 
             // todo: can we upsert in kysely?
             const existing = await db.selectFrom('hiscore').select('type').select('level').select('value').select('playtime').where('account_id', '=', account.id).where('type', '=', hiscoreType).where('profile', '=', profile).executeTakeFirst();
@@ -162,7 +168,7 @@ async function updateHiscores(account: HiscoreAccount | undefined, player: Playe
                     type: hiscoreType,
                     level: player.baseLevels[stat],
                     value: player.stats[stat],
-                    playtime: existing.level === player.baseLevels[stat] ? existing.playtime : player.playtime,
+                    playtime: existing.level === player.baseLevels[stat] ? existing.playtime : reached,
                     date: toDbDate(new Date())
                 });
             } else if (!existing) {
@@ -172,7 +178,7 @@ async function updateHiscores(account: HiscoreAccount | undefined, player: Playe
                     type: hiscoreType,
                     level: player.baseLevels[stat],
                     value: player.stats[stat],
-                    playtime: player.playtime
+                    playtime: reached
                 });
             }
         }

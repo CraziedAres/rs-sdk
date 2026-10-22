@@ -131,6 +131,11 @@ export interface NearbyPlayer {
     distance: number;
     /** See NearbyNpc.reachable. */
     reachable?: boolean;
+    /** Current client-observed combat target. This is populated only while the
+     * target is corroborated by the entity's combat cycle. */
+    combatTargetType?: 'npc' | 'player' | 'none';
+    combatTargetIndex?: number;
+    inCombat?: boolean;
 }
 
 export interface GroundItem {
@@ -415,6 +420,8 @@ export interface OpFeedbackState {
 
 export interface BotState {
     tick: number;
+    /** Version of nearby-player combat-target telemetry emitted by the Lite client. */
+    combatTargetTelemetryVersion: number;
     /** Monotonic publication cursor; advances for each state sent to agents. */
     revision: number;
     player: PlayerState | null;

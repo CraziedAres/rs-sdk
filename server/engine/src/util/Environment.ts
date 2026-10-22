@@ -57,7 +57,9 @@ export default {
     // Off by default; set WORLD_FEED_TOKEN to require ?token= on connect.
     WORLD_FEED: tryParseBoolean(process.env.WORLD_FEED, false),
     WORLD_FEED_TOKEN: process.env.WORLD_FEED_TOKEN || '',
-    WORLD_FEED_MAX_CLIENTS: tryParseInt(process.env.WORLD_FEED_MAX_CLIENTS, 32),
+    WORLD_FEED_MAX_CLIENTS: tryParseInt(process.env.WORLD_FEED_MAX_CLIENTS, 128),
+    // Clients must send activity (the viewer sends a ping every 30s) to keep their slot.
+    WORLD_FEED_IDLE_TIMEOUT_MS: tryParseInt(process.env.WORLD_FEED_IDLE_TIMEOUT_MS, 120_000),
     HISCORES_HIDDEN_NAMES: (process.env.HISCORES_HIDDEN_NAMES || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
     BANNED_USERNAME_WORDS: (process.env.BANNED_USERNAME_WORDS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
 };
