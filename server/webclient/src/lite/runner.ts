@@ -9,10 +9,12 @@
 //   bun src/lite/runner.ts <botname>          # reads bots/<botname>/bot.env
 //
 // Run from server/webclient so the '#/*' import map resolves.
+//
+// Exit codes, for whatever restarts us, are listed in runner-exit.ts.
 
 import { fileURLToPath } from 'node:url';
 
-import { OutdatedClientError } from './net/GameConnection.js';
+import { EXIT_LOGGED_OUT, LOGOUT_BUTTON_COMPONENT, REQUESTED_LOGOUT_TICKS, loginFailureExit, sessionEndExit } from './runner-exit.js';
 import { startSession, type LiteSession } from './session.js';
 import { type ActionResult } from '#/bot/ActionExecutor.js';
 import { BotActionQueue, type QueuedBotAction } from '#/bot/ActionQueue.js';
@@ -43,6 +45,7 @@ class LiteGatewayRunner {
     private lastFastKbdPrayerOnIndices: number[] = [];
     private fastKbdPrayerOffPending = false;
     private lastFastKbdPrayerOffDispatchTick = -1;
+    private logoutClickTick = -1;
 
     private ws: WebSocket | null = null;
     private wsConnected = false;
@@ -142,6 +145,11 @@ class LiteGatewayRunner {
         };
     }
 
+    /** True when the logout button was clicked within the last REQUESTED_LOGOUT_TICKS ticks. */
+    loggedOutOnRequest(): boolean {
+        return this.logoutClickTick >= 0 && this.serverTick - this.logoutClickTick <= REQUESTED_LOGOUT_TICKS;
+    }
+
     stop(): void {
         this.preventReconnect = true;
         if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
@@ -224,6 +232,9 @@ class LiteGatewayRunner {
         if (!queued) return;
 
         const action = queued.action;
+        if (action.type === 'clickComponent' && action.componentId === LOGOUT_BUTTON_COMPONENT) {
+            this.logoutClickTick = this.serverTick;
+        }
         const resultOrPromise = this.client.executeBotAction(action);
 
         if (resultOrPromise instanceof Promise) {
@@ -406,12 +417,11 @@ const session = await startSession({
     profanityFilter: ['false', '0', 'off', 'no'].includes(profanityRaw) ? false : undefined,
     quiet: true
 }).catch((err: unknown) => {
-    // A revision mismatch won't fix itself: exit 3 so a supervisor can stop restarting us
-    if (err instanceof OutdatedClientError) {
-        console.error(`[lite-runner] ${err.message}`);
-        process.exit(3);
-    }
-    throw err;
+    // Revision mismatch (3) or a server refusal code (7); anything else rethrows (1)
+    const code = loginFailureExit(err);
+    if (code === null) throw err;
+    console.error(`[lite-runner] ${err instanceof Error ? err.message : err}`);
+    process.exit(code);
 });
 
 console.log(`[lite-runner] '${env.BOT_USERNAME}' logged into ${host}`);
@@ -442,4 +452,6 @@ process.on('SIGINT', () => {
 const end = await session.stopped;
 console.log(`[lite-runner] Game session ended (${end.reason})`, end.error ?? '');
 runner.stop();
-process.exit(end.reason === 'stopped' ? 0 : 1);
+const exitCode = sessionEndExit(end, runner.loggedOutOnRequest());
+if (exitCode === EXIT_LOGGED_OUT) console.log('[lite-runner] Logged out as requested');
+process.exit(exitCode);
