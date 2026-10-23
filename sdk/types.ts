@@ -146,6 +146,11 @@ export interface NearbyPlayer {
     distance: number;
     /** See NearbyNpc.reachable. */
     reachable?: boolean;
+    /** Current client-observed combat target. This is populated only while the
+     * target is corroborated by the entity's combat cycle. */
+    combatTargetType?: 'npc' | 'player' | 'none';
+    combatTargetIndex?: number;
+    inCombat?: boolean;
 }
 
 /**
@@ -489,6 +494,19 @@ export interface SetCombatStyleResult {
     reason?: 'no_combat_style_state' | 'no_such_style' | 'dispatch_failed' | 'not_applied';
 }
 
+export interface LogoutResult {
+    /** True once the session was seen to end, not merely when the button was clicked. */
+    success: boolean;
+    message: string;
+    /**
+     * `in_combat`: the server refused within 16 ticks of combat.
+     * `timeout`: the session was not seen to end in time.
+     * `not_logged_in`: no game session was attached to log out.
+     * Unset for the server's other refusals (a duel, a gnomeball pitch); `message` has its text.
+     */
+    reason?: 'in_combat' | 'timeout' | 'not_logged_in';
+}
+
 export interface CombatEvent {
     tick: number;
     /** Monotonic publication revision when this event first became agent-visible. */
@@ -572,6 +590,8 @@ export interface OpFeedbackState {
 
 export interface BotWorldState {
     tick: number;
+    /** Version of nearby-player combat-target telemetry emitted by the Lite client. */
+    combatTargetTelemetryVersion?: number;
     /** Tick on which an updated Lite runner already emitted policy-gated KBD op2. */
     fastKbdAttackTick?: number;
     /** Prayer-on packets emitted in-process immediately before first-spawn KBD op2. */

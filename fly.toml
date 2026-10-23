@@ -27,6 +27,9 @@ NODE_TICKRATE = "300"
 NODE_XPRATE = "25"
 WEBSITE_REGISTRATION = "false"
 WEB_PORT = "8080"
+# The spectator viewer sends a small heartbeat; inactive sockets are closed after two minutes.
+WORLD_FEED_MAX_CLIENTS = "128"
+WORLD_FEED_IDLE_TIMEOUT_MS = "120000"
 # Gateway's direct listener (see the 7443 service below).
 GATEWAY_PUBLIC_PORT = "7781"
 # Concurrent game sessions per source IP (code default 200). Keyed on

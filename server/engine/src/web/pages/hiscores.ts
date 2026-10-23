@@ -56,15 +56,16 @@ function formatStackCount(count: number): string {
     return `${count}`;
 }
 
-// Format playtime (in game ticks) to human-readable string
+// Format playtime (in game ticks) to human-readable string, with the exact tick count on hover
 function formatPlaytime(ticks: number): string {
     const totalSeconds = Math.floor(ticks * (Environment.NODE_TICKRATE / 1000));
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
-    if (hours > 0) {
-        return `${hours}h ${minutes}m`;
-    }
-    return `${minutes}m`;
+    const seconds = totalSeconds % 60;
+    // Zero-pad below the leading unit so right-aligned columns line up on h/m/s.
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const time = hours > 0 ? `${hours}h ${pad(minutes)}m ${pad(seconds)}s` : minutes > 0 ? `${minutes}m ${pad(seconds)}s` : `${seconds}s`;
+    return `<span title="${ticks.toLocaleString()} ticks" style="font-variant-numeric: tabular-nums">${time}</span>`;
 }
 
 // Serve complete snapshots while the read worker refreshes rankings off the tick thread.

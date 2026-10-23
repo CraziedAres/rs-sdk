@@ -40,7 +40,9 @@ cd server/webclient && bun install && bun src/lite/runner.ts {username}
 ```
 
 It logs `Gateway connected, registering as '{username}'` once it's ready. One
-process per bot; it exits non-zero if the game session ends. Without it, a
+process per bot; it exits non-zero if the game session ends: 6 after a
+`bot.logout()`, 7 (with a `login_response=<code>` line) when the server refuses
+the login, 3 on a revision mismatch, otherwise 1. Without it, a
 script exits with `No game client is attached`. MCP `execute_code` doesn't need
 this step; it opens a browser client itself.
 
@@ -217,6 +219,7 @@ For the complete method reference, see **[sdk/API.md](sdk/API.md)** (auto-genera
 | `dismissBlockingUI()`           | Dismiss level-up dialogs (called automatically by all actions)   |
 | `navigateDialog(choices)`       | Auto-click through dialog options                                |
 | `skipTutorial()`                | Skip the tutorial island                                         |
+| `logout()`                      | Log out (saves, leaves the world); fails `in_combat` within 16 ticks of combat |
 
 ### sdk.\* Commonly Used Directly
 

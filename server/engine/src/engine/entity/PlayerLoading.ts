@@ -11,7 +11,7 @@ import { fromBase37, toBase37 } from '#/util/JString.js';
 
 export class PlayerLoading {
     public static readonly SAV_MAGIC: number = 0x2004;
-    public static readonly SAV_VERSION: number = 8;
+    public static readonly SAV_VERSION: number = 9;
 
     static verify(sav: Packet) {
         if (sav.g2() !== PlayerLoading.SAV_MAGIC) {
@@ -178,6 +178,12 @@ export class PlayerLoading {
                 player.recoveryItems.push({ id: sav.g2(), count: sav.g4s() });
             }
             player.recoverItems();
+        }
+
+        if (version >= 9) {
+            for (let i = 0; i < 21; i++) {
+                player.levelPlaytime[i] = sav.g4s();
+            }
         }
 
         player.combatLevel = player.getCombatLevel();

@@ -191,6 +191,9 @@ export class BotSDK {
     private pendingScreenshots = new Map<string, PendingScreenshot>();
     private stateListeners = new Set<(state: BotWorldState) => void>();
     private connectionListeners = new Set<(state: ConnectionState, attempt?: number) => void>();
+    /** Set when the gateway reports the bot's game client gone; cleared by the next state. */
+    private clientDetached = false;
+    private clientDetachedListeners = new Set<() => void>();
     private connectPromise: Promise<void> | null = null;
     private sdkClientId: string;
     private temporaryDoorBlocks = new pathfinding.TemporaryDoorBlocklist();
@@ -488,6 +491,21 @@ export class BotSDK {
     onConnectionStateChange(listener: (state: ConnectionState, attempt?: number) => void): () => void {
         this.connectionListeners.add(listener);
         return () => this.connectionListeners.delete(listener);
+    }
+
+    /**
+     * True when the gateway has reported the bot's game client gone (a lite
+     * runner exited, a browser tab closed) and no state has arrived since.
+     * `getState()` still returns the last state the client sent.
+     */
+    isClientDetached(): boolean {
+        return this.clientDetached ?? false;
+    }
+
+    /** Called when the gateway reports the bot's game client gone. Returns an unsubscribe function. */
+    onClientDetached(listener: () => void): () => void {
+        this.clientDetachedListeners.add(listener);
+        return () => this.clientDetachedListeners.delete(listener);
     }
 
     /** Get connection mode (control or observe). */
@@ -2033,6 +2051,7 @@ export class BotSDK {
             // Use server timestamp if available, otherwise use local time
             this.stateReceivedAt = message.stateReceivedAt || Date.now();
             this.tickClock.observe(message.state.tick, this.stateReceivedAt);
+            this.clientDetached = false;
             for (const listener of this.stateListeners) {
                 try {
                     listener(message.state);
@@ -2056,6 +2075,18 @@ export class BotSDK {
         }
 
         if (message.type === 'sdk_error') {
+            // The gateway's notice that the game client went away (gateway.ts, bot socket close)
+            if (message.error === 'Bot disconnected') {
+                this.clientDetached = true;
+                for (const listener of this.clientDetachedListeners) {
+                    try {
+                        listener();
+                    } catch (e) {
+                        console.error('Client detached listener error:', e);
+                    }
+                }
+            }
+
             // Handle controller pre-emption: another controller connected, so we were kicked
             if (message.error?.includes('another controller connected')) {
                 console.warn(`[BotSDK] Pre-empted by another controller - disabling auto-reconnect`);

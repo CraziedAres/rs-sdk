@@ -111,9 +111,11 @@ structure over patching it, so it cannot drift.
 - **Sessions always end loudly.** `stopped` resolves with a `SessionEnd`
   (`stopped` / `logged-out` / `disconnected` / `idle` / `error`) and `onEnd` fires
   with the same, so a supervisor can tell "finished" from "died" — `swarm.ts`
-  re-logs a bot in with backoff, `runner.ts` exits non-zero. Anything other than
-  `stopped` is a death. The `idle` case is a socket that is nominally open but
-  has heard nothing for ~60s; the engine writes PLAYER_INFO to every player every
+  re-logs a bot in with backoff, `runner.ts` exits non-zero (6 for a logout it
+  was asked for, 7 for a refused login; see `runner-exit.ts`). Anything other
+  than `stopped` is a death, except a `logged-out` right after a logout click.
+  The `idle` case is a socket that is nominally open but has heard nothing for
+  ~60s; the engine writes PLAYER_INFO to every player every
   tick, so silence that long is a dead socket that never sent a FIN.
 - **Entity positions are snapped, not interpolated.** `LiteClient.snapEntities`
   puts `x`/`z` on `routeX[0]`/`routeZ[0]` each tick instead of easing a few

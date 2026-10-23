@@ -32,21 +32,22 @@
 | `async waitForDialogClose(timeout: number = 30000): Promise<void>` | Wait for dialog to close. |
 | `async navigateDialog(choices: (number \| string \| RegExp)[]): Promise<void>` | _No description provided._ |
 
-### Doors
-
-| Signature | Description |
-|---|---|
-| `async openDoor(target?: NearbyLoc \| string \| RegExp): Promise<OpenDoorResult>` | Open a door or gate, walking to it if needed. |
-
 ### Other
 
 | Signature | Description |
 |---|---|
+| `async logout(options: { timeoutTicks?: number } = {}): Promise<LogoutResult>` | Log out with the game's logout button (component 2458, `logout:try_logout`), so the server saves the character and removes it from the world. Closing the client's socket instead leaves the player in the world until the idle logout, 500 ticks later. Succeeds only once the session is seen to end: the gateway reports the game client gone (a lite runner exits, with code 6), a state arrives with `inGame: false` (a browser client), or the gateway's status shows the bot dead or out of game. Fails with reason `in_combat` when the server answers "You can't log out until 10 seconds after the end of combat" (16 ticks after the last hit; the player stays logged in), `not_logged_in` when no game session is attached, and `timeout` when the session is not seen to end within `timeoutTicks` game ticks (default 50). The server's other refusals (a duel, a gnomeball pitch) fail with no reason and the server's text as the message. |
 | `async useItemOnLoc(item: InventoryItem \| string \| RegExp, loc: NearbyLoc \| string \| RegExp, options: { timeout?: number } = {}): Promise<UseItemOnLocResult>` | Use an inventory item on a nearby location (e.g., fish on range, ore on furnace). Walks to the location first (handling doors), then uses the item. |
 | `async useItemOnNpc(item: InventoryItem \| string \| RegExp, npc: NearbyNpc \| string \| RegExp, options: { timeout?: number } = {}): Promise<UseItemOnNpcResult>` | Use an inventory item on a nearby NPC (e.g., bones on altar keeper, item on NPC). Walks to the NPC first (handling doors), then uses the item. |
 | `async dropItem(target: InventoryItem \| string \| RegExp, amount: number \| 'all' = 'all'): Promise<DropItemResult>` | Drop inventory items by name, waiting for each drop to land before sending the next. `sendDropItem` on a slot the server has already emptied silently no-ops, so slot loops built on stale state lose most of their sends; this re-resolves the slot from fresh state every time. `amount` counts inventory slots (a whole stack drops as one). Pass `'all'` or `-1` to drop every matching slot. |
 | `async closeInterface(timeout: number = 5000): Promise<ActionResult>` | Close any open modal interface (bank, book, quest scroll, etc.). |
 | `async setCombatStyle(target: CombatStyleTarget, timeout?: number): Promise<SetCombatStyleResult>` | Select a combat style and wait until the server has applied it. Takes a style index, or the skill to train: `{ trains: 'Strength' }` picks the style that trains only Strength (aggressive), falling back to one that trains it among others (controlled) when the weapon has no such style. Indices depend on the weapon (index 2 is aggressive on a stabsword but controlled on a scimitar), so the skill form is resolved from `state.combatStyle.styles`, never assumed. ```ts const result = await bot.setCombatStyle({ trains: 'Defence' }); if (!result.success) console.log(result.reason, result.message); ``` Confirmation is `state.combatStyle.currentStyle` (varp 43, com_mode) reaching the index. The server ignores the click while the player is busy and only resyncs the varp, so a click that changed nothing comes back as `reason: 'not_applied'`. com_mode is not saved: it is back to 0 after every login, so set it again then. com_mode reads 0 until the server sends it, so an index-0 request is always clicked rather than trusted as already selected. `timeout` is in ms; by default 30 game ticks. |
+
+### Doors
+
+| Signature | Description |
+|---|---|
+| `async openDoor(target?: NearbyLoc \| string \| RegExp): Promise<OpenDoorResult>` | Open a door or gate, walking to it if needed. |
 
 ### Woodcutting & Firemaking
 
@@ -173,6 +174,7 @@
 | `isAuthenticated(): boolean` | Check if the gateway has accepted our credentials. True means the transport and auth are both fine - if state is still missing after this, the problem is that no game client is logged in, not the connection. |
 | `getConnectionState(): ConnectionState` | Get current connection state (connecting, connected, reconnecting, disconnected). |
 | `getReconnectAttempt(): number` | Get current reconnection attempt number. |
+| `isClientDetached(): boolean` | True when the gateway has reported the bot's game client gone (a lite runner exited, a browser tab closed) and no state has arrived since. `getState()` still returns the last state the client sent. |
 | `getConnectionMode(): SDKConnectionMode` | Get connection mode (control or observe). |
 | `async isBotConnected(): Promise<boolean>` | Check if bot is currently connected to gateway. |
 | `getState(): BotWorldState \| null` | Get current game state snapshot. |
@@ -216,6 +218,7 @@
 
 | Signature | Description |
 |---|---|
+| `onClientDetached(listener: () => void): () => void` | Called when the gateway reports the bot's game client gone. Returns an unsubscribe function. |
 | `async checkBotStatus(): Promise<BotStatus>` | Check bot status via gateway HTTP endpoint. Returns info about whether bot is connected and who else is controlling/observing. |
 | `async launchBrowser(): Promise<void>` | Launch native browser to client URL. Uses the `open` package for cross-platform support (macOS, Windows, Linux, WSL). Falls back to printing the URL if no browser can be opened. |
 | `ticksToMs(ticks: number): number` | Wall-clock ms for `ticks` game ticks at the measured tick rate, never less than at 100 ms/tick. BotActions sizes its default timeouts with this, so a 300 ms server gets the same number of ticks as a 100 ms one. |
@@ -508,6 +511,18 @@ interface SetCombatStyleResult {
 }
 ```
 
+### LogoutResult
+
+```typescript
+interface LogoutResult {
+  /** True once the session was seen to end, not merely when the button was clicked. */
+  success: boolean;
+  message: string;
+  /** `in_combat`: the server refused within 16 ticks of combat. `timeout`: the session was not seen to end in time. `not_logged_in`: no game session was attached to log out. Unset for the server's other refusals (a duel, a gnomeball pitch); `message` has its text. */
+  reason?: 'in_combat' | 'timeout' | 'not_logged_in';
+}
+```
+
 ### PrayerState
 
 ```typescript
@@ -553,6 +568,8 @@ interface OpFeedbackState {
 ```typescript
 interface BotWorldState {
   tick: number;
+  /** Version of nearby-player combat-target telemetry emitted by the Lite client. */
+  combatTargetTelemetryVersion?: number;
   /** Tick on which an updated Lite runner already emitted policy-gated KBD op2. */
   fastKbdAttackTick?: number;
   /** Prayer-on packets emitted in-process immediately before first-spawn KBD op2. */

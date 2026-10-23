@@ -303,6 +303,10 @@ export default class Player extends PathingEntity {
             sav.p4(item.count);
         }
 
+        for (let i = 0; i < 21; i++) {
+            sav.p4(this.levelPlaytime[i]);
+        }
+
         sav.p4(Packet.getcrc(sav.data, 0, sav.pos));
         const bytes = sav.data.subarray(0, sav.pos);
         if (checkpoint && playerSaveStore()) World.checkpointPlayers(this, bytes);
@@ -330,6 +334,9 @@ export default class Player extends PathingEntity {
     lastRunEnergy: number = -1;
     runweight: number = 0;
     playtime: number = 0;
+    // rs-sdk: playtime tick each base level was reached at, so hiscores rank by when the level
+    // happened rather than when the player next logged out. 0 = reached before this was tracked.
+    levelPlaytime: Int32Array = new Int32Array(21);
     stats: Int32Array = new Int32Array(21);
     levels: Uint8Array = new Uint8Array(21);
     vars: Int32Array;
@@ -1895,6 +1902,8 @@ export default class Player extends PathingEntity {
         this.baseLevels[stat] = getLevelByExp(this.stats[stat]);
 
         if (this.baseLevels[stat] > before) {
+            this.levelPlaytime[stat] = this.playtime;
+
             if (this.levels[stat] < before) {
                 // replenish stat
                 this.levels[stat] += this.baseLevels[stat] - before;

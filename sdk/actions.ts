@@ -40,6 +40,7 @@ import type {
     CraftLeatherResult,
     SmithResult,
     SetCombatStyleResult,
+    LogoutResult,
     CombatStyleTarget,
     CombatStyleOption,
     OpenBankResult,
@@ -109,6 +110,12 @@ const NEVER_AUTO_CLOSE = new Set([
  * op costs one attempt instead of the 10s action timeout.
  */
 const PICKPOCKET_ACK_TICKS = 3;
+
+/** The logout tab's button, `logout:try_logout` in content/pack/interface.pack. */
+const LOGOUT_BUTTON_COMPONENT = 2458;
+const LOGOUT_TIMEOUT_TICKS = 50;
+/** logout.rs2 and the engine's p_preventlogout refusals, lowercase. */
+const LOGOUT_REFUSALS = ["you can't log out"] as const;
 
 export class BotActions {
     private helpers: ActionHelpers;
@@ -294,6 +301,80 @@ export class BotActions {
         }
 
         return { success: false, message: 'No tutorial NPC found' };
+    }
+
+    /**
+     * Log out with the game's logout button (component 2458, `logout:try_logout`),
+     * so the server saves the character and removes it from the world. Closing
+     * the client's socket instead leaves the player in the world until the idle
+     * logout, 500 ticks later.
+     *
+     * Succeeds only once the session is seen to end: the gateway reports the
+     * game client gone (a lite runner exits, with code 6), a state arrives with
+     * `inGame: false` (a browser client), or the gateway's status shows the bot
+     * dead or out of game. Fails with reason `in_combat` when the server
+     * answers "You can't log out until 10 seconds after the end of combat"
+     * (16 ticks after the last hit; the player stays logged in),
+     * `not_logged_in` when no game session is attached, and `timeout` when the
+     * session is not seen to end within `timeoutTicks` game ticks (default 50).
+     * The server's other refusals (a duel, a gnomeball pitch) fail with no
+     * reason and the server's text as the message.
+     */
+    async logout(options: { timeoutTicks?: number } = {}): Promise<LogoutResult> {
+        const state = this.sdk.getState();
+        if (!state?.inGame || this.sdk.isClientDetached()) {
+            return { success: false, message: 'Not logged in: no game session is attached', reason: 'not_logged_in' };
+        }
+
+        await this.dismissBlockingUI();
+
+        const timeoutTicks = options.timeoutTicks ?? LOGOUT_TIMEOUT_TICKS;
+        const deadline = Date.now() + ticksToMs(this.sdk, timeoutTicks);
+        const messageCursor = this.helpers.getMessageTick();
+        let detached = false;
+        const unsubscribe = this.sdk.onClientDetached(() => { detached = true; });
+        try {
+            const sent = await this.sdk.sendClickComponent(LOGOUT_BUTTON_COMPONENT);
+            if (!sent.success && !detached && /not connected/i.test(sent.message)) {
+                return { success: false, message: `Not logged in: ${sent.message}`, reason: 'not_logged_in' };
+            }
+
+            let lastStatusCheck = 0;
+            while (true) {
+                if (detached) {
+                    return { success: true, message: 'Logged out: the game client left the gateway' };
+                }
+                const now = this.sdk.getState();
+                if (now && !now.inGame) {
+                    return { success: true, message: 'Logged out: the client reports it is no longer in game' };
+                }
+                const refusal = this.helpers.findRefusal(messageCursor, LOGOUT_REFUSALS);
+                if (refusal) {
+                    return /combat/i.test(refusal)
+                        ? { success: false, message: refusal, reason: 'in_combat' }
+                        : { success: false, message: refusal };
+                }
+
+                const remaining = deadline - Date.now();
+                if (remaining <= 0) break;
+
+                // State stops once the client leaves; if the detach notice is missed, the gateway's status still shows it.
+                if (this.sdk.getStateAge() >= ticksToMs(this.sdk, 3) && Date.now() - lastStatusCheck >= ticksToMs(this.sdk, 5)) {
+                    lastStatusCheck = Date.now();
+                    const status = await this.sdk.checkBotStatus();
+                    if (status.status === 'dead' || !status.inGame) {
+                        return { success: true, message: `Logged out: the gateway reports the bot ${status.status === 'dead' ? 'gone' : 'out of game'}` };
+                    }
+                }
+
+                await this.sdk.waitForStateChange(Math.min(remaining, ticksToMs(this.sdk, 1))).catch(() => {});
+            }
+
+            const dispatch = sent.success ? '' : ` (the click may not have been sent: ${sent.message})`;
+            return { success: false, message: `Still logged in ${timeoutTicks} ticks after clicking logout${dispatch}`, reason: 'timeout' };
+        } finally {
+            unsubscribe();
+        }
     }
 
     /** Dismiss any blocking UI like level-up dialogs. */
