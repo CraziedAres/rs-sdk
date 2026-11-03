@@ -67,6 +67,19 @@ import type {
     ServeTradesResult,
 } from './types';
 import { PRAYER_INDICES, PRAYER_NAMES, PRAYER_LEVELS } from './types';
+import type {
+    BankLoadResult,
+    BurstResult,
+    CastOnItemResult,
+    CraftRunesResult,
+    CrossObstacleResult,
+    EnterRuinsResult,
+    MakeXOpener,
+    MakeXResult,
+    PacedResult,
+    WithdrawRequest,
+} from './types';
+import { ProcessingActions } from './processing';
 import {
     countInventoryById,
     countMatching,
@@ -120,10 +133,173 @@ const LOGOUT_REFUSALS = ["you can't log out"] as const;
 export class BotActions {
     private helpers: ActionHelpers;
     private ge: GEActions;
+    private processing: ProcessingActions;
 
     constructor(private sdk: BotSDK) {
         this.helpers = new ActionHelpers(sdk);
         this.ge = new GEActions(sdk, this);
+        this.processing = new ProcessingActions(sdk, this);
+    }
+
+    // ============ Processing: bursts, make-X, bank loads ============
+
+    /**
+     * Use one inventory item on another, `times` times, sending up to `perTick`
+     * (1-5) per server tick. The server applies up to 5 player packets a tick, so
+     * a no-delay combine (headless arrows, cutting gems, unfinished and finished
+     * potions, stringing bows) runs 5 per tick with `perTick: 5`. Sends go out at
+     * the start of each tick, slots re-resolved from that tick's state; unstackable
+     * items get one send each on distinct slots, while stacks and tools (a side
+     * whose count doesn't fall, or `keep`) take every send. Each tick's effect is
+     * read from the next frame (`perTick` report: sends, XP, rejected ops). A tick
+     * with a rejected op drops the rest to one per tick. Stops on `times`, an empty
+     * side (`out_of_items`), `stallTicks` ticks with no effect (`no_effect`), or a
+     * make-X dialog opening (`dialog_opened`: not a no-delay combine; use makeX).
+     * ```ts
+     * const r = await bot.useItemOnItem('Arrow shaft', 'Feather', { times: 50, perTick: 5 });
+     * console.log(r.xpGained, r.perTick.map(t => t.sent).join('+'), r.rejected);
+     * ```
+     */
+    async useItemOnItem(
+        source: InventoryItem | string | RegExp,
+        target: InventoryItem | string | RegExp,
+        options: { times?: number; perTick?: number; keep?: 'source' | 'target' | 'both'; timeoutTicks?: number; stallTicks?: number } = {}
+    ): Promise<BurstResult> {
+        return this.processing.useItemOnItem(source, target, options);
+    }
+
+    /**
+     * Click an inventory option ('Bury', 'Identify', 'Clean', or an op index) on
+     * every matching item, up to `max`. With `perTick` above 1 it bursts like
+     * useItemOnItem (no-delay ops such as identifying herbs). By default it paces
+     * by the effect instead: one send, wait for the XP or inventory change, wait
+     * `cooldownTicks`, send the next. Ops sent while the player is delayed (burying
+     * is one bone per 3 ticks) are dropped silently; each dropped send raises the
+     * cooldown by a tick and goes again, and the result's `cooldownTicks` is the
+     * learned value to pass in next time.
+     * ```ts
+     * const r = await bot.useInventoryItems(/^big bones$/i, 'Bury', { cooldownTicks: 1 });
+     * ```
+     */
+    async useInventoryItems(
+        target: InventoryItem | string | RegExp,
+        option: string | RegExp | number,
+        options: { max?: number; perTick?: number; cooldownTicks?: number; timeoutTicks?: number } = {}
+    ): Promise<BurstResult | PacedResult> {
+        return this.processing.useInventoryItems(target, option, options);
+    }
+
+    /**
+     * Make `amount` of a product from a skill's "What would you like to make?"
+     * dialog (fletching, spinning, any `skill_multi` menu). Clicks the product's
+     * Make 1/5/10 button, or Make X and then answers the count prompt, then
+     * watches the XP: each tick it rises is one product. If the run stops early
+     * (a level-up interrupts it) it reopens the dialog with `open` and goes on.
+     * `open` is a function, `{ use, on }` (item on item), `{ use, onLoc }` (item on
+     * a loc) or `{ loc, option }` (a loc option such as a spinning wheel's Spin);
+     * without it the dialog must already be open.
+     * ```ts
+     * await bot.makeX('long bow', 27, { open: { use: 'Knife', on: /^maple logs$/i }, skill: 'Fletching' });
+     * await bot.makeX('flax', 28, { open: { loc: /spinning wheel/i, option: 'Spin' }, skill: 'Crafting' });
+     * ```
+     */
+    async makeX(
+        product: string | undefined,
+        amount: number,
+        options: { open?: MakeXOpener; skill?: string; stallTicks?: number; timeoutTicks?: number; restarts?: number } = {}
+    ): Promise<MakeXResult> {
+        return this.processing.makeX(product, amount, options);
+    }
+
+    /**
+     * Use an item on a loc (raw fish on a range, ore on a furnace) `amount` times.
+     * The first use walks there through bot.useItemOnLoc; the rest are sent from
+     * where the player stands, one after each effect (the item's count falling),
+     * paced like useInventoryItems. A loc that answers with a make-X dialog is
+     * handed to makeX for `product`.
+     * ```ts
+     * const r = await bot.useItemOnLocX(/^raw lobster$/i, /^range$/i, 28);
+     * ```
+     */
+    async useItemOnLocX(
+        item: InventoryItem | string | RegExp,
+        loc: NearbyLoc | string | RegExp,
+        amount: number,
+        options: { product?: string; cooldownTicks?: number; timeoutTicks?: number } = {}
+    ): Promise<PacedResult> {
+        return this.processing.useItemOnLocX(item, loc, amount, options);
+    }
+
+    /**
+     * Cast a spell on an inventory item: High/Low Alchemy, the enchants, Superheat.
+     * `spell` is a `Spells` id or a name ('high alchemy', 'HIGH_ALCHEMY', 'enchant
+     * lvl3'). Succeeds on the Magic XP. Then, by default, it waits out the spell's
+     * delay (High Alchemy lands one per 5 ticks, the others one per 3), so the
+     * next call's cast is accepted rather than dropped; a cast that shows no XP
+     * within 2 ticks is sent again (up to `tries`).
+     * ```ts
+     * const r = await bot.castOnItem('high alchemy', /^yew longbow$/i);
+     * ```
+     */
+    async castOnItem(
+        spell: number | string,
+        item: InventoryItem | string | RegExp,
+        options: { waitOutDelay?: boolean; tries?: number; timeoutTicks?: number } = {}
+    ): Promise<CastOnItemResult> {
+        return this.processing.castOnItem(spell, item, options);
+    }
+
+    /**
+     * With the bank open, deposit every carried item except those matching
+     * `keep` (tools, runes), one deposit-all per item kind.
+     * ```ts
+     * await bot.depositAllExcept([/knife/i, /^nature rune$/i]);
+     * ```
+     */
+    async depositAllExcept(keep: Array<string | RegExp>): Promise<BankLoadResult> {
+        return this.processing.depositAllExcept(keep);
+    }
+
+    /**
+     * With the bank open, withdraw several items in one visit. Reports what
+     * arrived per item and which requests the bank couldn't fill (`missing`).
+     * ```ts
+     * await bot.withdrawMany([{ item: /^maple logs$/i, amount: 27 }]);
+     * ```
+     */
+    async withdrawMany(requests: WithdrawRequest[]): Promise<BankLoadResult> {
+        return this.processing.withdrawMany(requests);
+    }
+
+    /**
+     * Cross an agility obstacle or shortcut: interact with `option`, then wait
+     * until the player stands within a tile of `expect.to` and/or Agility XP lands
+     * (`expect.xp`, the default when no tile is given). A failed obstacle (HP lost,
+     * not where expected) is `reason: 'failed'`.
+     */
+    async crossObstacle(
+        loc: NearbyLoc | string | RegExp,
+        option: string | RegExp | number = 1,
+        expect: { to?: { x: number; z: number }; xp?: boolean; timeoutTicks?: number } = {}
+    ): Promise<CrossObstacleResult> {
+        return this.processing.crossObstacle(loc, option, expect);
+    }
+
+    /**
+     * Enter a runecrafting altar: use the talisman on the mysterious ruins (or
+     * 'Enter' them when no talisman is carried, e.g. with a tiara worn), then wait
+     * for the teleport inside.
+     */
+    async enterRuins(
+        talisman: InventoryItem | string | RegExp = /talisman$/i,
+        options: { ruins?: NearbyLoc | string | RegExp; timeoutTicks?: number } = {}
+    ): Promise<EnterRuinsResult> {
+        return this.processing.enterRuins(talisman, options);
+    }
+
+    /** Craft the carried essence into runes at the altar inside the ruins; succeeds on Runecraft XP with essence used. */
+    async craftRunes(options: { altar?: NearbyLoc | string | RegExp; essence?: InventoryItem | string | RegExp; timeoutTicks?: number } = {}): Promise<CraftRunesResult> {
+        return this.processing.craftRunes(options);
     }
 
     /** Walk to the physical exchange and open it. Requires updated client/server GE state support. */
@@ -4008,7 +4184,7 @@ export class BotActions {
      */
     async smithAtAnvil(
         product: string | number = 'dagger',
-        options: { barPattern?: RegExp; timeout?: number; timeoutTicks?: number } = {}
+        options: { barPattern?: RegExp; timeout?: number; timeoutTicks?: number; count?: 1 | 5 | 10 } = {}
     ): Promise<SmithResult> {
         if (typeof product !== 'string' && typeof product !== 'number') {
             // A RegExp product used to throw deep inside on .toLowerCase().
@@ -4107,8 +4283,11 @@ export class BotActions {
         let interruption = '';
         for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
             if (attempt > 0) await this.dismissBlockingUI();
-            const outcome = await this._smithAttempt(anvil, bar.id, componentId, componentSlot, timeout, findSmithedItem);
-            if ('result' in outcome) return outcome.result;
+            const outcome = await this._smithAttempt(anvil, bar.id, componentId, componentSlot, timeout, findSmithedItem, options.count ?? 1);
+            if ('result' in outcome) {
+                if (!outcome.result.success || (options.count ?? 1) <= 1) return outcome.result;
+                return this._smithRest(outcome.result, bar.id, options.count!, findSmithedItem);
+            }
             interruption = outcome.interrupted;
         }
         return { success: false, message: `Smithing was interrupted ${MAX_ATTEMPTS} times: ${interruption}`, reason: 'interrupted' };
@@ -4126,6 +4305,7 @@ export class BotActions {
         componentSlot: number,
         timeout: number,
         findSmithedItem: () => InventoryItem | null,
+        count: 1 | 5 | 10 = 1,
     ): Promise<{ result: SmithResult } | { interrupted: string }> {
         const bar = this.sdk.getInventory().find(i => i.id === barId);
         if (!bar) return { result: { success: false, message: 'No bars in inventory', reason: 'no_bars' } };
@@ -4196,7 +4376,8 @@ export class BotActions {
 
         // Click the smithing component (uses INV_BUTTON)
         const clickTick = this.sdk.getState()?.tick ?? 0;
-        const clickResult = await this.sdk.sendClickComponentWithOption(componentId, 1, componentSlot);
+        // INV_BUTTON1/2/3 on the anvil = make 1/5/10 (smithing.rs2 inv_button handlers).
+        const clickResult = await this.sdk.sendClickComponentWithOption(componentId, count === 10 ? 3 : count === 5 ? 2 : 1, componentSlot);
         if (!clickResult.success) {
             return { result: { success: false, message: 'Failed to click smithing option', reason: 'interface_not_opened' } };
         }
@@ -4221,6 +4402,30 @@ export class BotActions {
             if (refused) return { result: refused };
             return { result: { success: false, message: 'Smithing timed out', reason: 'timeout' } };
         }
+    }
+
+    /**
+     * After the first item of a make-5/10 smith: wait while the rest are made
+     * (about 5 ticks each), until `count` items, the bars run out, or 10 ticks
+     * pass with no Smithing XP (a level-up box stops the run).
+     */
+    private async _smithRest(first: SmithResult, barId: number, count: number, findSmithedItem: () => InventoryItem | null): Promise<SmithResult> {
+        let made = 1;
+        let xp = this.sdk.getSkill('Smithing')?.experience || 0;
+        let gained = first.xpGained ?? 0;
+        let quiet = 0;
+        let tick = this.sdk.getState()?.tick ?? 0;
+        while (made < count && quiet < 10) {
+            let s;
+            try {
+                s = await this.sdk.waitForCondition(st => st.tick > tick, ticksToMs(this.sdk, 10));
+            } catch { break; }
+            tick = s.tick;
+            const now = s.skills.find(k => k.name === 'Smithing')?.experience || 0;
+            if (now > xp) { made++; gained += now - xp; xp = now; quiet = 0; } else quiet++;
+            if (!s.inventory.some(i => i.id === barId)) break;
+        }
+        return { ...first, message: `Smithed ${made} item${made === 1 ? '' : 's'}`, xpGained: gained, itemsSmithed: made, product: findSmithedItem() || first.product };
     }
 
     // ============ Porcelain: Generic Interactions ============
@@ -5115,6 +5320,9 @@ export class BotActions {
             if (currentXp > magicBefore) {
                 // Find the enchanted item (it replaces the original in the same slot)
                 const enchanted = state.inventory.find(i => i.slot === item!.slot);
+                // The XP lands while the spell's p_delay still runs: a cast sent
+                // now would be dropped silently. Wait it out (one cast per 3 ticks).
+                await this.waitOutSpellDelay(state.tick, 3);
                 return {
                     success: true,
                     message: 'Enchanted item successfully',
@@ -5143,6 +5351,7 @@ export class BotActions {
         const finalXp = this.sdk.getSkill('Magic')?.experience || 0;
         if (finalXp > magicBefore) {
             const enchanted = this.sdk.getState()?.inventory.find(i => i.slot === item!.slot);
+            await this.waitOutSpellDelay(this.sdk.getState()?.tick ?? 0, 3);
             return {
                 success: true,
                 message: 'Enchanted item successfully',
@@ -5152,6 +5361,15 @@ export class BotActions {
         }
 
         return { success: false, message: 'Enchantment timed out', reason: 'timeout' };
+    }
+
+    /** Wait until a spell cast on `castTick` has finished its delay (`periodTicks` between accepted casts). */
+    private async waitOutSpellDelay(castTick: number, periodTicks: number): Promise<void> {
+        const until = castTick + periodTicks - 1;
+        if ((this.sdk.getState()?.tick ?? until) >= until) return;
+        try {
+            await this.sdk.waitForCondition(s => s.tick >= until, ticksToMs(this.sdk, periodTicks + 5));
+        } catch { /* no frames: return; the next cast re-checks */ }
     }
 
     /**

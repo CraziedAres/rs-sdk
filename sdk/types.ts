@@ -1019,3 +1019,121 @@ export interface StringAmuletResult {
     product?: InventoryItem;
     reason?: 'no_amulet' | 'no_string' | 'level_too_low' | 'timeout';
 }
+
+// ============ Processing (bursts, make-X, bank loads) ============
+
+/** One tick of a burst: sends fired at the start of `tick`, and their effect read from the next frame. */
+export interface BurstTick {
+    tick: number;
+    sent: number;
+    /** Total XP gained in the next frame. */
+    xp: number;
+    /** Rejected ops (`opFeedback.opRejectedCount`) seen in the next frame. */
+    rejected: number;
+}
+
+export interface BurstResult {
+    success: boolean;
+    message: string;
+    /** Sends fired. */
+    sent: number;
+    /** Ticks with sends. */
+    ticks: number;
+    xpGained: number;
+    /** Rejected ops over the whole call. */
+    rejected: number;
+    perTick: BurstTick[];
+    /** Why it stopped before `times` (absent when every send went out and took effect). */
+    reason?: 'out_of_items' | 'no_effect' | 'dialog_opened' | 'modal_open' | 'timeout' | 'item_not_found';
+    /** A tick showed a rejected op, so the rest went one per tick. */
+    fellBackToOnePerTick?: boolean;
+}
+
+export interface PacedResult {
+    success: boolean;
+    message: string;
+    /** Sends that took effect. */
+    done: number;
+    sent: number;
+    /** Sends that showed no effect (dropped while the player was delayed) and were sent again. */
+    dropped: number;
+    ticks: number;
+    xpGained: number;
+    /** The ticks waited after each effect before the next send, as learned. Pass it back as `cooldownTicks` next time. */
+    cooldownTicks: number;
+    reason?: 'out_of_items' | 'no_effect' | 'dialog_opened' | 'modal_open' | 'timeout' | 'item_not_found' | 'no_option' | 'cant_reach';
+}
+
+/** How makeX opens its dialog: a function, an item on an item, an item on a loc, or a loc option. */
+export type MakeXOpener =
+    | (() => Promise<unknown>)
+    | { use: InventoryItem | string | RegExp; on: InventoryItem | string | RegExp }
+    | { use: InventoryItem | string | RegExp; onLoc: NearbyLoc | string | RegExp }
+    | { loc: NearbyLoc | string | RegExp; option?: string | RegExp | number };
+
+export interface MakeXResult {
+    success: boolean;
+    message: string;
+    /** Products made: ticks on which the skill's XP rose. */
+    made: number;
+    xpGained: number;
+    ticks: number;
+    /** The product label clicked. */
+    product?: string;
+    reason?: 'dialog_not_open' | 'no_product' | 'item_not_found' | 'out_of_items' | 'interrupted' | 'no_effect' | 'timeout';
+}
+
+export interface CastOnItemResult {
+    success: boolean;
+    message: string;
+    xpGained?: number;
+    /** The item cast on. */
+    item?: string;
+    /** The tick whose frame showed the XP. */
+    castTick?: number;
+    /** Ticks between accepted casts of this spell. */
+    periodTicks?: number;
+    /** Sends that were dropped and sent again. */
+    retries?: number;
+    reason?: 'unknown_spell' | 'item_not_found' | 'no_runes' | 'level_too_low' | 'refused' | 'modal_open' | 'timeout';
+}
+
+export interface WithdrawRequest {
+    item: string | RegExp;
+    /** -1 for all. */
+    amount: number;
+    asNote?: boolean;
+}
+
+export interface BankLoadResult {
+    success: boolean;
+    message: string;
+    deposited: string[];
+    withdrawn: Array<{ item: string; amount: number }>;
+    /** Requested items the bank doesn't hold. */
+    missing: string[];
+    reason?: 'bank_not_open' | 'deposit_failed' | 'missing';
+}
+
+export interface CrossObstacleResult {
+    success: boolean;
+    message: string;
+    xpGained: number;
+    position?: { x: number; z: number };
+    reason?: 'loc_not_found' | 'cant_reach' | 'failed' | 'timeout';
+}
+
+export interface EnterRuinsResult {
+    success: boolean;
+    message: string;
+    position?: { x: number; z: number };
+    reason?: 'no_talisman' | 'cant_reach' | 'no_effect' | 'timeout';
+}
+
+export interface CraftRunesResult {
+    success: boolean;
+    message: string;
+    xpGained: number;
+    essenceUsed: number;
+    reason?: 'no_essence' | 'altar_not_found' | 'cant_reach' | 'level_too_low' | 'timeout';
+}

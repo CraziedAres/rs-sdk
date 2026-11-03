@@ -215,7 +215,13 @@ For the complete method reference, see **[sdk/API.md](sdk/API.md)** (auto-genera
 | `burnLogs(target?)`             | Light logs with tinderbox                                        |
 | `fletchLogs(product?)`          | Fletch logs with knife                                           |
 | `craftLeather(product?)`        | Craft leather with needle                                        |
-| `smithAtAnvil(product)`         | Smith bars at anvil                                              |
+| `smithAtAnvil(product)`         | Smith bars at anvil (`{ count: 5 }` / `10` for a run)            |
+| `useItemOnItem(a, b, opts?)`    | Combine items, up to 5 per tick (`perTick: 5`) for no-delay ones |
+| `makeX(product, n, { open })`   | Drive a "What would you like to make?" dialog for `n` products   |
+| `useInventoryItems(item, op)`   | Bury/identify every match, paced by effect (or bursts)           |
+| `useItemOnLocX(item, loc, n)`   | Item on a range/furnace `n` times, paced by effect               |
+| `castOnItem(spell, item)`       | High Alch/enchant an item; waits out the spell's delay           |
+| `depositAllExcept(keep)` / `withdrawMany(list)` | One bank visit per load                          |
 | `dismissBlockingUI()`           | Dismiss level-up dialogs (called automatically by all actions)   |
 | `navigateDialog(choices)`       | Auto-click through dialog options                                |
 | `skipTutorial()`                | Skip the tutorial island                                         |
