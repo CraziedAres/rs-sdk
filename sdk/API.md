@@ -8,9 +8,26 @@
 - `bot.*` methods are high-level helpers. They attempt to observe method-specific evidence such as movement, inventory, XP, dialog, or state changes. When a method returns a result, inspect its `success` and any `reason` or `message`: the strength of completion evidence varies by method.
 - `sdk.send*` methods are low-level browser-client dispatches. A successful `ActionResult` means the enhanced browser client accepted and dispatched the command; it does **not** prove that the game server processed it or that the intended game effect occurred.
 - Methods whose signature returns `Promise<...>` are asynchronous and must be awaited. In particular, `scanNearbyLocs()` and `scanGroundItems()` return promises.
+- The server applies at most 5 player packets per tick. Ops with no delay (combining items, identifying herbs) can therefore run 5 per tick: `bot.useItemOnItem(a, b, { perTick: 5 })`. Ops that start a delay (burying, alching, enchanting, cooking) are dropped silently while it runs, with only `opFeedback.opRejectedCount` moving: `useInventoryItems`, `useItemOnLocX` and `castOnItem` pace those by their effect instead. Every processing helper reports the XP and inventory effect it saw, per tick for bursts.
 - `getInventory().length` is the number of occupied slots. `InventoryItem.count` is the quantity in that one slot, and `findInventoryItem()` returns the first matching slot rather than an aggregate across matching slots.
 
 ## BotActions (high-level)
+
+### Processing (bursts, make-X, bank loads)
+
+| Signature | Description |
+|---|---|
+| `async useItemOnItem(source: InventoryItem \| string \| RegExp, target: InventoryItem \| string \| RegExp, options: { times?: number; perTick?: number; keep?: 'source' \| 'target' \| 'both'; timeoutTicks?: number; stallTicks?: number } = {}): Promise<BurstResult>` | Use one inventory item on another, `times` times, sending up to `perTick` (1-5) per server tick. The server applies up to 5 player packets a tick, so a no-delay combine (headless arrows, cutting gems, unfinished and finished potions, stringing bows) runs 5 per tick with `perTick: 5`. Sends go out at the start of each tick, slots re-resolved from that tick's state; unstackable items get one send each on distinct slots, while stacks and tools (a side whose count doesn't fall, or `keep`) take every send. Each tick's effect is read from the next frame (`perTick` report: sends, XP, rejected ops). A tick with a rejected op drops the rest to one per tick. Stops on `times`, an empty side (`out_of_items`), `stallTicks` ticks with no effect (`no_effect`), or a make-X dialog opening (`dialog_opened`: not a no-delay combine; use makeX). ```ts const r = await bot.useItemOnItem('Arrow shaft', 'Feather', { times: 50, perTick: 5 }); console.log(r.xpGained, r.perTick.map(t => t.sent).join('+'), r.rejected); ``` |
+| `async useItemChain(steps: ChainStep[], options: { perTick?: number; times?: number; timeoutTicks?: number; stallTicks?: number } = {}): Promise<BurstResult>` | Run a chain of no-delay steps over one load in the same ticks, up to `perTick` (default 5) sends a tick: identify herbs, then herb on vial, then the secondary on the unfinished potion. Each tick fills its sends from the latest step with items ready first, so products move down the chain as soon as the frame shows them, instead of one burst per step each waiting out the two-tick effect lag. Same report and stops as useItemOnItem. ```ts await bot.useItemChain([ { kind: 'op', item: /^herb$/i, option: 'Identify' }, { kind: 'combine', source: 'Ranarr weed', target: 'Vial of water' }, { kind: 'combine', source: 'Snape grass', target: 'Unfinished potion' }, ], { times: 27 }); ``` |
+| `async useInventoryItems(target: InventoryItem \| string \| RegExp, option: string \| RegExp \| number, options: { max?: number; perTick?: number; cooldownTicks?: number; timeoutTicks?: number } = {}): Promise<BurstResult \| PacedResult>` | Click an inventory option ('Bury', 'Identify', 'Clean', or an op index) on every matching item, up to `max`. With `perTick` above 1 it bursts like useItemOnItem (no-delay ops such as identifying herbs). By default it paces by the effect instead: one send, wait for the XP or inventory change, wait `cooldownTicks`, send the next. Ops sent while the player is delayed (burying is one bone per 3 ticks) are dropped silently; each dropped send raises the cooldown by a tick and goes again, and the result's `cooldownTicks` is the learned value to pass in next time. ```ts const r = await bot.useInventoryItems(/^big bones$/i, 'Bury', { cooldownTicks: 1 }); ``` |
+| `async makeX(product: string \| undefined, amount: number, options: { open?: MakeXOpener; skill?: string; stallTicks?: number; timeoutTicks?: number; restarts?: number } = {}): Promise<MakeXResult>` | Make `amount` of a product from a skill's "What would you like to make?" dialog (fletching, spinning, any `skill_multi` menu). Clicks the product's Make 1/5/10 button, or Make X and then answers the count prompt, then watches the XP: each tick it rises is one product. A level-up box ends the server's run; it then closes the box, reopens the dialog with `open` and goes on, until `amount` are made or two reopened runs make nothing. `open` is a function, `{ use, on }` (item on item), `{ use, onLoc }` (item on a loc) or `{ loc, option }` (a loc option such as a spinning wheel's Spin); without it the dialog must already be open. ```ts await bot.makeX('long bow', 27, { open: { use: 'Knife', on: /^maple logs$/i }, skill: 'Fletching' }); await bot.makeX('flax', 28, { open: { loc: /spinning wheel/i, option: 'Spin' }, skill: 'Crafting' }); ``` |
+| `async useItemOnLocX(item: InventoryItem \| string \| RegExp, loc: NearbyLoc \| string \| RegExp, amount: number, options: { product?: string; cooldownTicks?: number; timeoutTicks?: number } = {}): Promise<PacedResult>` | Use an item on a loc (raw fish on a range, ore on a furnace) `amount` times. The first use walks there through bot.useItemOnLoc; the rest are sent from where the player stands, one after each effect (the item's count falling), paced like useInventoryItems. A loc that answers with a make-X dialog is handed to makeX for `product`. ```ts const r = await bot.useItemOnLocX(/^raw lobster$/i, /^range$/i, 28); ``` |
+| `async castOnItem(spell: number \| string, item: InventoryItem \| string \| RegExp, options: { waitOutDelay?: boolean; tries?: number; timeoutTicks?: number } = {}): Promise<CastOnItemResult>` | Cast a spell on an inventory item: High/Low Alchemy, the enchants, Superheat. `spell` is a `Spells` id or a name ('high alchemy', 'HIGH_ALCHEMY', 'enchant lvl3'). Succeeds on the Magic XP. Then, by default, it waits out the spell's delay (High Alchemy lands one per 5 ticks, the others one per 3), so the next call's cast is accepted rather than dropped; a cast that shows no XP within 3 ticks is sent again (up to `tries`). ```ts const r = await bot.castOnItem('high alchemy', /^yew longbow$/i); ``` |
+| `async depositAllExcept(keep: Array<string \| RegExp>): Promise<BankLoadResult>` | With the bank open, deposit every carried item except those matching `keep` (tools, runes), one deposit-all per item kind. ```ts await bot.depositAllExcept([/knife/i, /^nature rune$/i]); ``` |
+| `async withdrawMany(requests: WithdrawRequest[]): Promise<BankLoadResult>` | With the bank open, withdraw several items in one visit. Reports what arrived per item and which requests the bank couldn't fill (`missing`). ```ts await bot.withdrawMany([{ item: /^maple logs$/i, amount: 27 }]); ``` |
+| `async crossObstacle(loc: NearbyLoc \| string \| RegExp, option: string \| RegExp \| number = 1, expect: { to?: { x: number; z: number }; xp?: boolean; timeoutTicks?: number } = {}): Promise<CrossObstacleResult>` | Cross an agility obstacle or shortcut: interact with `option`, then wait until the player stands within a tile of `expect.to` and/or Agility XP lands (`expect.xp`, the default when no tile is given). A failed obstacle (HP lost, not where expected) is `reason: 'failed'`. |
+| `async enterRuins(talisman: InventoryItem \| string \| RegExp = /talisman$/i, options: { ruins?: NearbyLoc \| string \| RegExp; timeoutTicks?: number } = {}): Promise<EnterRuinsResult>` | Enter a runecrafting altar: use the talisman on the mysterious ruins (or 'Enter' them when no talisman is carried, e.g. with a tiara worn), then wait for the teleport inside. |
+| `async craftRunes(options: { altar?: NearbyLoc \| string \| RegExp; essence?: InventoryItem \| string \| RegExp; timeoutTicks?: number } = {}): Promise<CraftRunesResult>` | Craft the carried essence into runes at the altar inside the ruins; succeeds on Runecraft XP with essence used. |
 
 ### Grand Exchange
 
@@ -134,7 +151,7 @@
 |---|---|
 | `async fletchLogs(product?: string): Promise<FletchResult>` | Fletch logs into bows or arrow shafts using a knife. `product` is matched against the dialog's visible product labels ("15 Arrow Shafts", "Oak Short Bow", ...), so 'arrow shaft', 'shortbow' and 'oak long' all resolve. Omit it to take the first product offered. One call makes one batch — 15 shafts, or one bow. |
 | `async craftLeather(product?: string): Promise<CraftLeatherResult>` | Craft leather into armour using needle and thread. |
-| `async smithAtAnvil(product: string \| number = 'dagger', options: { barPattern?: RegExp; timeout?: number; timeoutTicks?: number } = {}): Promise<SmithResult>` | Smith a bar into an item at an anvil. Success means the effect was seen: Smithing XP or a bar used up. Too few bars or too low a level fail at once (`no_bars`, `level_too_low`), read from the server's chat-box reply. A dialog that closes the anvil before anything is smithed, such as a late level-up, is dismissed and retried; `interrupted` means that kept happening. |
+| `async smithAtAnvil(product: string \| number = 'dagger', options: { barPattern?: RegExp; timeout?: number; timeoutTicks?: number; count?: 1 \| 5 \| 10 } = {}): Promise<SmithResult>` | Smith a bar into an item at an anvil. Success means the effect was seen: Smithing XP or a bar used up. Too few bars or too low a level fail at once (`no_bars`, `level_too_low`), read from the server's chat-box reply. A dialog that closes the anvil before anything is smithed, such as a late level-up, is dismissed and retried; `interrupted` means that kept happening. |
 | `async craftJewelry(options: { barPattern?: RegExp; product?: string; gem?: string; timeout?: number; } = {}): Promise<CraftJewelryResult>` | Craft jewelry at a furnace using a gold/silver bar and optional gem. Requires: bar + mould in inventory (ring mould, necklace mould, or amulet mould). Optionally a gem for gem-set jewelry. |
 | `async enchantItem(target: InventoryItem \| string \| RegExp, level: 1 \| 2 \| 3 \| 4 \| 5, options: { timeout?: number } = {}): Promise<EnchantResult>` | Cast an enchantment spell on a jewelry item. |
 | `async stringAmulet(target: InventoryItem \| string \| RegExp = /amulet/i, options: { timeout?: number } = {}): Promise<StringAmuletResult>` | String an amulet using a ball of wool. |
@@ -959,6 +976,130 @@ interface StringAmuletResult {
   xpGained?: number;
   product?: InventoryItem;
   reason?: 'no_amulet' | 'no_string' | 'level_too_low' | 'timeout';
+}
+```
+
+### BurstResult
+
+```typescript
+interface BurstResult {
+  success: boolean;
+  message: string;
+  /** Sends fired. */
+  sent: number;
+  /** Ticks with sends. */
+  ticks: number;
+  xpGained: number;
+  /** Rejected ops over the whole call. */
+  rejected: number;
+  perTick: BurstTick[];
+  /** Why it stopped before `times` (absent when every send went out and took effect). */
+  reason?: 'out_of_items' | 'no_effect' | 'dialog_opened' | 'modal_open' | 'timeout' | 'item_not_found';
+  /** A tick showed a rejected op, so the rest went one per tick. */
+  fellBackToOnePerTick?: boolean;
+}
+```
+
+### PacedResult
+
+```typescript
+interface PacedResult {
+  success: boolean;
+  message: string;
+  /** Sends that took effect. */
+  done: number;
+  sent: number;
+  /** Sends that showed no effect (dropped while the player was delayed) and were sent again. */
+  dropped: number;
+  ticks: number;
+  xpGained: number;
+  /** The ticks waited after each effect before the next send, as learned. Pass it back as `cooldownTicks` next time. */
+  cooldownTicks: number;
+  reason?: 'out_of_items' | 'no_effect' | 'dialog_opened' | 'modal_open' | 'timeout' | 'item_not_found' | 'no_option' | 'cant_reach';
+}
+```
+
+### MakeXResult
+
+```typescript
+interface MakeXResult {
+  success: boolean;
+  message: string;
+  /** Products made: ticks on which the skill's XP rose. */
+  made: number;
+  xpGained: number;
+  ticks: number;
+  /** The product label clicked. */
+  product?: string;
+  reason?: 'dialog_not_open' | 'no_product' | 'item_not_found' | 'out_of_items' | 'interrupted' | 'no_effect' | 'timeout';
+}
+```
+
+### CastOnItemResult
+
+```typescript
+interface CastOnItemResult {
+  success: boolean;
+  message: string;
+  xpGained?: number;
+  /** The item cast on. */
+  item?: string;
+  /** The tick whose frame showed the XP. */
+  castTick?: number;
+  /** Ticks between accepted casts of this spell. */
+  periodTicks?: number;
+  /** Sends that were dropped and sent again. */
+  retries?: number;
+  reason?: 'unknown_spell' | 'item_not_found' | 'no_runes' | 'level_too_low' | 'refused' | 'modal_open' | 'timeout';
+}
+```
+
+### BankLoadResult
+
+```typescript
+interface BankLoadResult {
+  success: boolean;
+  message: string;
+  deposited: string[];
+  withdrawn: Array<{ item: string; amount: number }>;
+  /** Requested items the bank doesn't hold. */
+  missing: string[];
+  reason?: 'bank_not_open' | 'deposit_failed' | 'missing';
+}
+```
+
+### CrossObstacleResult
+
+```typescript
+interface CrossObstacleResult {
+  success: boolean;
+  message: string;
+  xpGained: number;
+  position?: { x: number; z: number };
+  reason?: 'loc_not_found' | 'cant_reach' | 'failed' | 'timeout';
+}
+```
+
+### EnterRuinsResult
+
+```typescript
+interface EnterRuinsResult {
+  success: boolean;
+  message: string;
+  position?: { x: number; z: number };
+  reason?: 'no_talisman' | 'cant_reach' | 'no_effect' | 'timeout';
+}
+```
+
+### CraftRunesResult
+
+```typescript
+interface CraftRunesResult {
+  success: boolean;
+  message: string;
+  xpGained: number;
+  essenceUsed: number;
+  reason?: 'no_essence' | 'altar_not_found' | 'cant_reach' | 'level_too_low' | 'timeout';
 }
 ```
 

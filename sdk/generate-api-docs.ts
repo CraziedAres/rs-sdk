@@ -130,12 +130,18 @@ function markdownCell(text: string): string {
         .replace(/\r?\n/g, ' ');
 }
 
+const PROCESSING_METHODS = new Set([
+    'useItemOnItem', 'useItemChain', 'useInventoryItems', 'makeX', 'useItemOnLocX', 'castOnItem',
+    'depositAllExcept', 'withdrawMany', 'crossObstacle', 'enterRuins', 'craftRunes',
+]);
+
 function methodCategory(name: string, surface: 'actions' | 'sdk'): string {
     const lower = name.toLowerCase();
 
     if (name.includes('GE') || name.startsWith('getMarket')) return 'Grand Exchange';
 
     if (surface === 'actions') {
+        if (PROCESSING_METHODS.has(name)) return 'Processing (bursts, make-X, bank loads)';
         if (lower.includes('dialog') || lower.includes('blocking') || lower.includes('tutorial')) return 'UI & Dialog';
         if (lower.includes('walk')) return 'Movement';
         if (lower.includes('mine')) return 'Mining';
@@ -203,6 +209,7 @@ function renderApiMarkdown(model: ApiModel): string {
         '- `bot.*` methods are high-level helpers. They attempt to observe method-specific evidence such as movement, inventory, XP, dialog, or state changes. When a method returns a result, inspect its `success` and any `reason` or `message`: the strength of completion evidence varies by method.',
         '- `sdk.send*` methods are low-level browser-client dispatches. A successful `ActionResult` means the enhanced browser client accepted and dispatched the command; it does **not** prove that the game server processed it or that the intended game effect occurred.',
         '- Methods whose signature returns `Promise<...>` are asynchronous and must be awaited. In particular, `scanNearbyLocs()` and `scanGroundItems()` return promises.',
+        '- The server applies at most 5 player packets per tick. Ops with no delay (combining items, identifying herbs) can therefore run 5 per tick: `bot.useItemOnItem(a, b, { perTick: 5 })`. Ops that start a delay (burying, alching, enchanting, cooking) are dropped silently while it runs, with only `opFeedback.opRejectedCount` moving: `useInventoryItems`, `useItemOnLocX` and `castOnItem` pace those by their effect instead. Every processing helper reports the XP and inventory effect it saw, per tick for bursts.',
         '- `getInventory().length` is the number of occupied slots. `InventoryItem.count` is the quantity in that one slot, and `findInventoryItem()` returns the first matching slot rather than an aggregate across matching slots.',
         '',
         '## BotActions (high-level)',
