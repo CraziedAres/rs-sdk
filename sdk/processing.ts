@@ -142,6 +142,9 @@ export function levelsOf(state: BotWorldState | null | undefined): number {
     return state?.skills.reduce((n, s) => n + (s.baseLevel ?? s.level ?? 0), 0) ?? 0;
 }
 
+/** Clean effects in a row before a paced op tries one tick less cooldown. */
+export const COOLDOWN_DECAY_AFTER = 6;
+
 /** Ticks a level-up box takes to show after the XP frame (measured 1-3). */
 export const LEVEL_UP_BOX_TICKS = 4;
 
@@ -510,10 +513,11 @@ export class ProcessingActions {
             return { success: false, message: 'A bank, shop or trade interface is open and hides the inventory from the server: close it first', done: 0, sent: 0, dropped: 0, ticks: 0, xpGained: 0, cooldownTicks: 0, reason: 'modal_open' };
         }
         const effect = opts.effect ?? ((a, b) => totalXp(b) > totalXp(a) || inventoryKey(b) !== inventoryKey(a));
-        const effectTicks = opts.effectTicks ?? 3;
+        // Bury and cook land after their first p_delay: the effect shows up to 4 frames after the send.
+        const effectTicks = opts.effectTicks ?? 4;
         const deadline = start.tick + (opts.timeoutTicks ?? opts.times * 8 + 20);
         let cooldown = Math.max(0, opts.cooldownTicks ?? 0);
-        let done = 0, sent = 0, dropped = 0, misses = 0;
+        let done = 0, sent = 0, dropped = 0, misses = 0, streak = 0;
         let reason: PacedResult['reason'];
         let state: BotWorldState = start;
 
@@ -535,11 +539,15 @@ export class ProcessingActions {
                 t = s.tick;
                 state = s;
                 if (effect(before, s)) { hit = s; break; }
-                if (rejectedOps(s) > rejectedOps(before)) break;
+                // Not opRejectedCount: an op that starts a delay (burying, cooking) moves it when the server takes the
+                // op, two frames before its effect shows. Only the effect decides.
             }
             if (hit) {
                 done++;
                 misses = 0;
+                // A drop can raise the cooldown past the action's real delay (a box that showed late): after a run of
+                // clean effects, try a tick less. A wrong guess costs one dropped send.
+                if (++streak >= COOLDOWN_DECAY_AFTER && cooldown > 0) { cooldown--; streak = 0; }
                 // A level-up opens its box a few ticks after the XP, from a script waiting on its button: an op sent
                 // before it shows is swallowed. So after a level-raising effect, wait for the box and close it.
                 if (levelsOf(hit) > levelsOf(before)) {
@@ -552,6 +560,7 @@ export class ProcessingActions {
             }
             dropped++;
             misses++;
+            streak = 0;
             // Dropped. With a box open the box took it: close it, the cooldown is fine. Otherwise the player was still
             // delayed: wait a tick longer after each effect from now on.
             if (state.dialog?.isOpen && !hasProductDialog(state)) { await this.bot.dismissBlockingUI(); state = this.state() ?? state; }
