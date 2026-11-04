@@ -450,6 +450,29 @@ export class ProcessingActions {
         });
     }
 
+    // ---------- dropping, 5 a tick ----------
+
+    /**
+     * Drops every matching inventory slot (up to `max`), up to 5 a tick: dropping has no delay, so the server takes a
+     * full tick's packets. Each slot is held until its effect frame, as in the other bursts. Inventory items publish no
+     * "Drop" option, so useInventoryItems can't do this.
+     */
+    async dropItems(target: ItemTarget, options: { max?: number; perTick?: number; timeoutTicks?: number } = {}): Promise<BurstResult> {
+        const state0 = this.state();
+        const max = Math.max(0, Math.floor(options.max ?? (state0 ? matchInventory(state0.inventory, target).length : 0)));
+        if (!state0 || max === 0) return this.burstDone(`No ${describeTarget(target)} in the inventory`, [], 0, 0, 0, 0, 'item_not_found', false);
+        return this.burst({
+            label: 'dropItems',
+            times: max,
+            perTick: options.perTick ?? MAX_OPS_PER_TICK,
+            timeoutTicks: options.timeoutTicks ?? max + 20,
+            plan: (state, budget, inFlight) => matchInventory(state.inventory, target)
+                .filter(i => !inFlight.has(i.slot))
+                .slice(0, budget)
+                .map(item => ({ slots: [item.slot], send: () => this.sdk.sendDropItem(item.slot) })),
+        });
+    }
+
     // ---------- S4: an inventory option on every match ----------
 
     async useInventoryItems(target: ItemTarget, option: string | RegExp | number, options: {

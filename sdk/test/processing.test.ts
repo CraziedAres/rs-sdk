@@ -11,7 +11,7 @@ import type { BurstResult, InventoryItem, PacedResult } from '../types';
 // in the frame for T+2; the client's own inventory is already up to date, so it
 // refuses a send on a slot it sees empty.
 
-type Op = { kind: 'combine'; src: number; dst: number } | { kind: 'use'; slot: number; op: number } | { kind: 'spell'; slot: number; spell: number };
+type Op = { kind: 'combine'; src: number; dst: number } | { kind: 'use'; slot: number; op: number } | { kind: 'spell'; slot: number; spell: number } | { kind: 'drop'; slot: number };
 interface World {
     tick: number;
     inventory: InventoryItem[];
@@ -70,6 +70,9 @@ function harness(world: World, rules: {
             } else if (op.kind === 'use') {
                 const a = bySlot(op.slot);
                 apply(a && rules.use ? rules.use(world, a, op.op) : false);
+            } else if (op.kind === 'drop') {
+                const a = bySlot(op.slot);
+                if (a) world.inventory = world.inventory.filter(i => i !== a); else world.rejected++;
             } else {
                 const a = bySlot(op.slot);
                 apply(a && rules.spell ? rules.spell(world, a, op.spell) : false);
@@ -83,6 +86,7 @@ function harness(world: World, rules: {
         return ok();
     };
     sdk.sendUseItem = async (slot: number, op = 1) => { queue.push({ kind: 'use', slot, op }); return ok(); };
+    sdk.sendDropItem = async (slot: number) => { queue.push({ kind: 'drop', slot }); return ok(); };
     sdk.sendSpellOnItem = async (slot: number, spell: number) => { queue.push({ kind: 'spell', slot, spell }); return ok(); };
     timers.push(setInterval(step, 4));
     const bot = new BotActions(sdk);
@@ -252,6 +256,25 @@ describe('effect-paced ops', () => {
         const r = await h.bot.useInventoryItems(/^unidentified guam$/i, 'Identify', { perTick: 5 }) as BurstResult;
         expect(r.perTick.map(t => t.sent)).toEqual([5, 5]);
         expect(r.xpGained).toBe(625);
+    });
+});
+
+describe('dropItems', () => {
+    test('a bag of logs goes 5 a tick, nothing else is touched, nothing is refused', async () => {
+        const logs = Array.from({ length: 27 }, (_, i) => item(1519, 'Willow logs', i + 1));
+        const h = harness({ tick: 100, inventory: [item(1351, 'Bronze axe', 0), ...logs], xp: {}, rejected: 0, delayedUntil: 0, dialog: { isOpen: false, options: [] } }, {});
+        const r = await h.bot.dropItems(/^willow logs$/i);
+        expect(r.success).toBe(true);
+        expect(r.sent).toBe(27);
+        expect(r.perTick.map(t => t.sent)).toEqual([5, 5, 5, 5, 5, 2]);
+        expect(h.world.inventory.map(i => i.name)).toEqual(['Bronze axe']);
+        expect(h.world.rejected).toBe(0);
+    });
+
+    test('nothing matching: fails without sending', async () => {
+        const h = harness({ tick: 100, inventory: [item(1351, 'Bronze axe', 0)], xp: {}, rejected: 0, delayedUntil: 0, dialog: { isOpen: false, options: [] } }, {});
+        const r = await h.bot.dropItems(/^willow logs$/i);
+        expect(r).toMatchObject({ success: false, sent: 0, reason: 'item_not_found' });
     });
 });
 

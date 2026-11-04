@@ -201,6 +201,20 @@ export class BotActions {
      * const r = await bot.useInventoryItems(/^big bones$/i, 'Bury', { cooldownTicks: 1 });
      * ```
      */
+    /**
+     * Drop every matching inventory slot, up to 5 a tick (no delay on dropping), each slot checked by its effect frame.
+     * `bot.dropItem` drops one slot and waits for it, about 2 ticks a slot; this clears a full bag of logs in about 7.
+     * ```ts
+     * const r = await bot.dropItems(/^willow logs$/i);
+     * ```
+     */
+    async dropItems(
+        target: InventoryItem | string | RegExp,
+        options: { max?: number; perTick?: number; timeoutTicks?: number } = {}
+    ): Promise<BurstResult> {
+        return this.processing.dropItems(target, options);
+    }
+
     async useInventoryItems(
         target: InventoryItem | string | RegExp,
         option: string | RegExp | number,
