@@ -29,6 +29,7 @@ import type {
     CrossObstacleResult,
     CraftRunesResult,
     EnterRuinsResult,
+    ChainStep,
     MakeXOpener,
     MakeXResult,
     PacedResult,
@@ -42,6 +43,13 @@ export type ItemTarget = InventoryItem | string | RegExp;
 
 /** The server applies at most this many player packets per tick. */
 export const MAX_OPS_PER_TICK = 5;
+
+/**
+ * Ticks from the frame an op is sent after to the frame that shows its effect:
+ * sent after the frame for tick T, it runs on server tick T+1 and shows in the
+ * frame for T+2 (measured on a local server at 400 ms).
+ */
+export const EFFECT_LAG_TICKS = 2;
 
 /**
  * Ticks from one accepted cast to the next for spells cast on an item
@@ -86,6 +94,19 @@ export function describeTarget(target: ItemTarget): string {
     return typeof target === 'string' ? target : target instanceof RegExp ? String(target) : target.name;
 }
 
+/** Withdraw buttons for `amount` of a stack of `inBank`: All when it takes the stack, else 10s, a 5, then 1s (no count prompt). */
+export function withdrawPackets(amount: number, inBank: number): number[] {
+    if (amount < 0 || amount >= inBank) return [-1];
+    const out: number[] = [];
+    let left = amount;
+    while (left >= 10) { out.push(10); left -= 10; }
+    if (left >= 5) { out.push(5); left -= 5; }
+    while (left > 0) { out.push(1); left--; }
+    return out;
+}
+
+const byIdTarget = (id: number): InventoryItem => ({ id, name: '', count: 1, slot: -1 } as unknown as InventoryItem);
+
 /** Total count across every slot a target matches. */
 export function countInventory(inventory: readonly InventoryItem[], target: ItemTarget): number {
     return matchInventory(inventory, target).reduce((n, i) => n + i.count, 0);
@@ -116,6 +137,14 @@ export function skillXp(state: BotWorldState | null | undefined, skill: string):
     return state?.skills.find(s => s.name.toLowerCase() === lower)?.experience ?? 0;
 }
 
+/** Sum of base levels: rises when any skill levels up. */
+export function levelsOf(state: BotWorldState | null | undefined): number {
+    return state?.skills.reduce((n, s) => n + (s.baseLevel ?? s.level ?? 0), 0) ?? 0;
+}
+
+/** Ticks a level-up box takes to show after the XP frame (measured 1-3). */
+export const LEVEL_UP_BOX_TICKS = 4;
+
 export function rejectedOps(state: BotWorldState | null | undefined): number {
     return state?.opFeedback?.opRejectedCount ?? 0;
 }
@@ -134,7 +163,8 @@ export function hasProductDialog(state: BotWorldState | null | undefined): boole
  * The button to click in a skill dialog for `amount` of `product`. These dialogs
  * publish, per product, its quantity buttons and then one button labelled with
  * the product (Make 1). The quantity buttons are the run just before the named
- * one. Amounts other than 1, 5 and 10 use Make X, which then asks for a count.
+ * one. 10 or more uses Make 10 (makeX reopens for the rest: a level-up ends most
+ * runs anyway); other amounts but 1 and 5 use Make X, which asks for a count.
  */
 export function resolveMakeButton(
     options: readonly DialogOption[],
@@ -150,7 +180,8 @@ export function resolveMakeButton(
     const label = named.text.replace(/\\n/g, ' ').trim();
     if (amount <= 1) return { option: named, count: null, label };
     if (amount === 5) { const b = find(/^make\s+5$/i); if (b) return { option: b, count: null, label }; }
-    if (amount === 10) { const b = find(/^make\s+10$/i); if (b) return { option: b, count: null, label }; }
+    // 10 or more: Make 10 (no count prompt, a round trip saved; makeX reopens for the rest).
+    if (amount >= 10) { const b = find(/^make\s+10$/i); if (b) return { option: b, count: null, label }; }
     const x = find(/^make\s+x$/i);
     if (x) return { option: x, count: amount, label };
     // No Make X: the largest fixed amount not above the request.
@@ -174,7 +205,6 @@ export function resolveSpell(spell: number | string): { id: number; name: SpellN
 
 // ---------- the engine ----------
 
-interface PendingTick { report: BurstTick; xp: number; rejected: number; key: string; state: BotWorldState }
 
 export class ProcessingActions {
     constructor(private readonly sdk: BotSDK, private readonly bot: BotActions) {}
@@ -187,6 +217,17 @@ export class ProcessingActions {
     private async frameAfter(tick: number, ticks = 10): Promise<BotWorldState | null> {
         try {
             return await this.sdk.waitForCondition(s => s.tick > tick, ticksToMs(this.sdk, ticks));
+        } catch {
+            return null;
+        }
+    }
+
+    /** The first frame within `ticks` ticks where `pred` holds, or null. */
+    private async waitFrames(pred: (s: BotWorldState) => boolean, ticks: number): Promise<BotWorldState | null> {
+        const now = this.state();
+        if (now && pred(now)) return now;
+        try {
+            return await this.sdk.waitForCondition(pred, ticksToMs(this.sdk, ticks));
         } catch {
             return null;
         }
@@ -211,13 +252,16 @@ export class ProcessingActions {
     }
 
     /**
-     * Fires up to `perTick` sends at the start of each server tick and reads
-     * their effect from the next frame. `plan` returns the sends for this tick
-     * (fewer when the inventory can't take more). Falls back to one send per
-     * tick for the rest of the call when a tick shows a rejected op.
+     * Fires up to `perTick` sends at the start of each server tick. An op sent
+     * after the frame for tick T runs on server tick T+1 and first shows in the
+     * frame for T+2 (measured), while the client's own inventory has already
+     * moved on, so a slot sent on stays out of `plan` (`inFlight`) until its
+     * effect frame. Each tick's report gets the XP and rejected ops of that frame.
+     * Falls back to one send per tick for the rest of the call when a frame shows
+     * a rejected op, and returns once the last sends' effects are in.
      */
     async burst(opts: {
-        plan: (state: BotWorldState, budget: number) => Array<() => Promise<ActionResult>>;
+        plan: (state: BotWorldState, budget: number, inFlight: ReadonlySet<number>) => Array<{ slots: number[]; send: () => Promise<ActionResult> }>;
         times: number;
         perTick: number;
         timeoutTicks: number;
@@ -234,46 +278,61 @@ export class ProcessingActions {
         const stallTicks = opts.stallTicks ?? 4;
         const xp0 = totalXp(start);
         const rej0 = rejectedOps(start);
-        const ticks: BurstTick[] = [];
-        let sent = 0, stall = 0, effective = 0, fellBack = false;
-        let pending: PendingTick | null = null;
+        const reports = new Map<number, BurstTick>();
+        const inFlight = new Map<number, number>(); // slot -> tick sent
+        let sent = 0, stall = 0, effective = 0, refusedTicks = 0, fellBack = false;
+        let lastSendTick = -1;
         let reason: BurstResult['reason'];
+        let prev: BotWorldState = start;
         let tick = start.tick;
         const deadline = start.tick + opts.timeoutTicks;
+        const settled = (t: number) => lastSendTick < 0 || t >= lastSendTick + EFFECT_LAG_TICKS;
 
         for (;;) {
             const state = await this.frameAfter(tick);
             if (!state) { reason = 'timeout'; break; }
             tick = state.tick;
-            if (pending) {
-                pending.report.xp = totalXp(state) - pending.xp;
-                pending.report.rejected = rejectedOps(state) - pending.rejected;
-                const changed = pending.report.xp > 0 || inventoryKey(state) !== pending.key;
-                if (changed) { effective++; opts.learn?.(pending.state, state); }
-                stall = changed ? 0 : stall + 1;
-                if (pending.report.rejected > 0 && perTick > 1) { perTick = 1; fellBack = true; }
-                pending = null;
-            }
+            for (const [slot, at] of inFlight) if (at + EFFECT_LAG_TICKS <= tick) inFlight.delete(slot);
+            const xp = totalXp(state) - totalXp(prev);
+            const rejected = rejectedOps(state) - rejectedOps(prev);
+            const changed = xp > 0 || inventoryKey(state) !== inventoryKey(prev);
+            const report = reports.get(tick - EFFECT_LAG_TICKS);
+            if (report) { report.xp += xp; report.rejected += rejected; }
+            if (changed) { effective++; stall = 0; opts.learn?.(prev, state); } else if (lastSendTick >= 0 && tick >= lastSendTick + EFFECT_LAG_TICKS) stall++;
+            if (rejected > 0 && perTick > 1) { perTick = 1; fellBack = true; }
+            prev = state;
             if (stall >= stallTicks) { reason = 'no_effect'; break; }
-            if (sent >= opts.times) break;
+            if (sent >= opts.times || reason === 'out_of_items') {
+                if (settled(tick) && !changed) break;
+                if (tick >= lastSendTick + EFFECT_LAG_TICKS + 2) break;
+                continue;
+            }
             if (tick >= deadline) { reason = 'timeout'; break; }
             if (hasProductDialog(state)) { reason = 'dialog_opened'; break; }
             if (await this.clearContinueDialog(state)) continue;
-            const sends = opts.plan(state, Math.min(perTick, opts.times - sent));
-            if (sends.length === 0) { reason = 'out_of_items'; break; }
-            const report: BurstTick = { tick, sent: sends.length, xp: 0, rejected: 0 };
-            pending = { report, xp: totalXp(state), rejected: rejectedOps(state), key: inventoryKey(state), state };
-            ticks.push(report);
-            const results = await Promise.all(sends.map(send => send()));
-            const failed = results.find(r => !r.success);
-            sent += sends.length;
-            if (failed && results.every(r => !r.success)) {
-                return this.burstDone(`${opts.label}: ${failed.message}`, ticks, sent, totalXp(this.state()) - xp0, rejectedOps(this.state()) - rej0, effective, failed.reason === 'modal_open' ? 'modal_open' : 'timeout', fellBack);
+            const planned = opts.plan(state, Math.min(perTick, opts.times - sent), new Set(inFlight.keys()));
+            if (planned.length === 0) {
+                // Nothing to send that isn't already on its way: wait for those, else the items are gone.
+                if (inFlight.size === 0) { reason = 'out_of_items'; if (settled(tick)) break; }
+                continue;
             }
+            const results = await Promise.all(planned.map(p => p.send()));
+            const modal = results.find(r => !r.success && r.reason === 'modal_open');
+            if (modal) return this.burstDone(`${opts.label}: ${modal.message}`, [...reports.values()], sent, totalXp(this.state()) - xp0, rejectedOps(this.state()) - rej0, effective, 'modal_open', fellBack);
+            const ok = planned.filter((_, i) => results[i]!.success);
+            // The client refuses a send whose slot it already sees empty (it never reaches the server).
+            refusedTicks = ok.length ? 0 : refusedTicks + 1;
+            if (refusedTicks >= 3) { reason = 'no_effect'; break; }
+            if (!ok.length) continue;
+            for (const p of ok) for (const slot of p.slots) inFlight.set(slot, tick);
+            reports.set(tick, { tick, sent: ok.length, xp: 0, rejected: 0 });
+            sent += ok.length;
+            lastSendTick = tick;
         }
         const end = this.state();
         const xpGained = totalXp(end) - xp0;
         const rejected = rejectedOps(end) - rej0;
+        const ticks = [...reports.values()];
         const message = `${opts.label}: ${sent} sent over ${ticks.length} ticks, ${xpGained} XP, ${rejected} rejected${reason ? ` (${reason})` : ''}`;
         return this.burstDone(message, ticks, sent, xpGained, rejected, effective, reason, fellBack);
     }
@@ -302,18 +361,20 @@ export class ProcessingActions {
             perTick: options.perTick ?? 1,
             timeoutTicks: options.timeoutTicks ?? times + 20,
             stallTicks: options.stallTicks,
-            plan: (state, budget) => {
-                const src = matchInventory(state.inventory, source);
+            plan: (state, budget, inFlight) => {
+                const src = matchInventory(state.inventory, source).filter(i => !inFlight.has(i.slot));
                 const srcSlots = new Set(src.map(i => i.slot));
-                const tgt = matchInventory(state.inventory, target).filter(i => !srcSlots.has(i.slot));
+                const tgt = matchInventory(state.inventory, target).filter(i => !srcSlots.has(i.slot) && !inFlight.has(i.slot));
                 const capS = sideCapacity(src, kept.source);
                 const capT = sideCapacity(tgt, kept.target);
                 const n = Math.min(budget, capS, capT);
-                const sends: Array<() => Promise<ActionResult>> = [];
+                const sends: Array<{ slots: number[]; send: () => Promise<ActionResult> }> = [];
                 for (let i = 0; i < n; i++) {
                     const a = pickForSend(src, i, capS), b = pickForSend(tgt, i, capT);
                     if (!a || !b) break;
-                    sends.push(() => this.sdk.sendUseItemOnItem(a.slot, b.slot));
+                    // Single items are used up: hold their slots until the effect frame. Stacks and tools are reused.
+                    const slots = [...(capS === Infinity ? [] : [a.slot]), ...(capT === Infinity ? [] : [b.slot])];
+                    sends.push({ slots, send: () => this.sdk.sendUseItemOnItem(a.slot, b.slot) });
                 }
                 return sends;
             },
@@ -322,6 +383,67 @@ export class ProcessingActions {
                 if (!kept.source && countInventory(after.inventory, source) >= countInventory(before.inventory, source)) kept.source = true;
                 if (!kept.target && countInventory(after.inventory, target) >= countInventory(before.inventory, target)) kept.target = true;
             },
+        });
+    }
+
+    // ---------- S1b: a chain of no-delay steps, pipelined ----------
+
+    /**
+     * Several no-delay steps over one load in the same ticks: each tick's sends
+     * (up to `perTick`) go to the latest step with items ready first, then the
+     * earlier ones, so a product of one step is used by the next as soon as its
+     * frame shows it (identify, then unfinished, then finished potions).
+     */
+    async useItemChain(steps: ChainStep[], options: { perTick?: number; times?: number; timeoutTicks?: number; stallTicks?: number } = {}): Promise<BurstResult> {
+        const kept = steps.map(st => ({ source: st.kind === 'combine' && (st.keep === 'source' || st.keep === 'both'), target: st.kind === 'combine' && (st.keep === 'target' || st.keep === 'both') }));
+        const opIndexOf = (item: InventoryItem, option: string | RegExp | number): number | null => {
+            if (typeof option === 'number') return option;
+            const re = typeof option === 'string' ? new RegExp(`^${option.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') : option;
+            return item.optionsWithIndex?.find(o => re.test(o.text))?.opIndex ?? null;
+        };
+        const times = options.times ?? 1000;
+        return this.burst({
+            label: 'useItemChain',
+            times,
+            perTick: options.perTick ?? MAX_OPS_PER_TICK,
+            timeoutTicks: options.timeoutTicks ?? 200,
+            stallTicks: options.stallTicks,
+            plan: (state, budget, inFlight) => {
+                const busy = new Set(inFlight);
+                const out: Array<{ slots: number[]; send: () => Promise<ActionResult> }> = [];
+                for (let k = steps.length - 1; k >= 0 && out.length < budget; k--) {
+                    const st = steps[k]!;
+                    if (st.kind === 'op') {
+                        for (const item of matchInventory(state.inventory, st.item)) {
+                            if (out.length >= budget) break;
+                            if (busy.has(item.slot)) continue;
+                            const op = opIndexOf(item, st.option);
+                            if (op === null) continue;
+                            busy.add(item.slot);
+                            out.push({ slots: [item.slot], send: () => this.sdk.sendUseItem(item.slot, op) });
+                        }
+                        continue;
+                    }
+                    const src = matchInventory(state.inventory, st.source).filter(i => !busy.has(i.slot) || kept[k]!.source || i.count > 1);
+                    const srcSlots = new Set(src.map(i => i.slot));
+                    const tgt = matchInventory(state.inventory, st.target).filter(i => !srcSlots.has(i.slot) && (!busy.has(i.slot) || kept[k]!.target || i.count > 1));
+                    const capS = sideCapacity(src, kept[k]!.source), capT = sideCapacity(tgt, kept[k]!.target);
+                    const n = Math.min(budget - out.length, capS, capT);
+                    for (let i = 0; i < n; i++) {
+                        const a = pickForSend(src, i, capS), b = pickForSend(tgt, i, capT);
+                        if (!a || !b) break;
+                        const slots = [...(capS === Infinity ? [] : [a.slot]), ...(capT === Infinity ? [] : [b.slot])];
+                        for (const sl of slots) busy.add(sl);
+                        out.push({ slots, send: () => this.sdk.sendUseItemOnItem(a.slot, b.slot) });
+                    }
+                }
+                return out;
+            },
+            learn: (before, after) => steps.forEach((st, k) => {
+                if (st.kind !== 'combine') return;
+                if (!kept[k]!.source && countInventory(after.inventory, st.source) >= countInventory(before.inventory, st.source) && countInventory(before.inventory, st.source) === 1) kept[k]!.source = true;
+                if (!kept[k]!.target && countInventory(after.inventory, st.target) >= countInventory(before.inventory, st.target) && countInventory(before.inventory, st.target) === 1) kept[k]!.target = true;
+            }),
         });
     }
 
@@ -348,9 +470,9 @@ export class ProcessingActions {
                 times: max,
                 perTick: options.perTick!,
                 timeoutTicks: options.timeoutTicks ?? max + 20,
-                plan: (state, budget) => matchInventory(state.inventory, target).slice(0, budget).flatMap(item => {
+                plan: (state, budget, inFlight) => matchInventory(state.inventory, target).filter(i => !inFlight.has(i.slot)).slice(0, budget).flatMap(item => {
                     const op = opIndexOf(item);
-                    return op === null ? [] : [() => this.sdk.sendUseItem(item.slot, op)];
+                    return op === null ? [] : [{ slots: [item.slot], send: () => this.sdk.sendUseItem(item.slot, op) }];
                 }),
             });
         }
@@ -418,14 +540,22 @@ export class ProcessingActions {
             if (hit) {
                 done++;
                 misses = 0;
+                // A level-up opens its box a few ticks after the XP, from a script waiting on its button: an op sent
+                // before it shows is swallowed. So after a level-raising effect, wait for the box and close it.
+                if (levelsOf(hit) > levelsOf(before)) {
+                    const box = await this.waitFrames(s => !!s.dialog?.isOpen, LEVEL_UP_BOX_TICKS);
+                    if (box && !hasProductDialog(box)) { await this.bot.dismissBlockingUI(); state = this.state() ?? box; continue; }
+                }
                 // Wait out the delay after the last one too, so the next call's first send isn't dropped.
                 if (cooldown > 0) state = (await this.untilTick(hit.tick + cooldown)) ?? hit;
                 continue;
             }
-            // Dropped: the player was still delayed. Wait a tick longer after each effect from now on.
             dropped++;
             misses++;
-            cooldown = Math.min(cooldown + 1, 8);
+            // Dropped. With a box open the box took it: close it, the cooldown is fine. Otherwise the player was still
+            // delayed: wait a tick longer after each effect from now on.
+            if (state.dialog?.isOpen && !hasProductDialog(state)) { await this.bot.dismissBlockingUI(); state = this.state() ?? state; }
+            else cooldown = Math.min(cooldown + 1, 8);
             if (misses >= 3) { reason = 'no_effect'; break; }
         }
         const end = this.state() ?? state;
@@ -469,7 +599,7 @@ export class ProcessingActions {
         const xpOf = (s: BotWorldState | null) => (options.skill ? skillXp(s, options.skill) : totalXp(s));
         const stallTicks = options.stallTicks ?? 8;
         const deadline = start.tick + (options.timeoutTicks ?? want * 8 + 40);
-        let made = 0, restarts = 0;
+        let made = 0, restarts = 0, idle = 0;
         let chosen: string | undefined;
         let reason: MakeXResult['reason'];
 
@@ -481,7 +611,8 @@ export class ProcessingActions {
                     if (made === 0) return { success: false, message: 'No make-X dialog is open and no way to open one was given', made, xpGained: 0, ticks: 0, reason: 'dialog_not_open' };
                     break;
                 }
-                if (state.dialog?.isOpen) await this.bot.dismissBlockingUI();
+                // A level-up box needs no click first: the engine closes a pause-button box when the next
+                // interaction arrives (Player.closeModal drops a PAUSEBUTTON script), so reopen straight away.
                 const opened = await this.open(options.open);
                 if (!opened.success) {
                     reason = made > 0 ? 'out_of_items' : (opened.reason === 'item_not_found' ? 'item_not_found' : 'dialog_not_open');
@@ -515,12 +646,16 @@ export class ProcessingActions {
                 const xp = xpOf(s);
                 if (xp > last) { made++; grantsThisRun++; last = xp; quiet = 0; } else quiet++;
                 if (made >= want || grantsThisRun >= target) break;
+                // A level-up box ends the run (its script takes over): reopen at once instead of waiting out stallTicks.
+                if (s.dialog?.isOpen && !hasProductDialog(s) && quiet >= 1) break;
                 if (tick >= deadline) { reason = 'timeout'; break; }
                 if (quiet >= stallTicks) break;
             }
             if (reason === 'timeout' || made >= want) break;
-            if (grantsThisRun === 0 && restarts > 0) { reason = 'no_effect'; break; }
-            if (++restarts > (options.restarts ?? 4)) { reason = 'interrupted'; break; }
+            // Runs that made something reopen freely (every level-up ends one); runs that made nothing count.
+            if (grantsThisRun > 0) idle = 0;
+            else if (++idle >= 2) { reason = made > 0 ? 'out_of_items' : 'no_effect'; break; }
+            if (++restarts > (options.restarts ?? 200)) { reason = 'interrupted'; break; }
         }
         const end = this.state();
         const xpGained = xpOf(end) - xpOf(start);
@@ -590,13 +725,14 @@ export class ProcessingActions {
             const sent = await this.sdk.sendSpellOnItem(target.slot, resolved.id);
             if (!sent.success) return { success: false, message: sent.message, reason: 'timeout' };
             let tick = s0.tick;
-            for (let k = 0; k < (options.timeoutTicks ?? 2); k++) {
+            for (let k = 0; k < (options.timeoutTicks ?? EFFECT_LAG_TICKS + 1); k++) {
                 const s = await this.frameAfter(tick);
                 if (!s) break;
                 tick = s.tick;
                 const gained = skillXp(s, 'Magic') - magic0;
                 if (gained > 0) {
-                    if (options.waitOutDelay !== false) await this.untilTick(s.tick + period - 1);
+                    // XP shows a tick after the cast ran (EFFECT_LAG_TICKS): the next cast can go after the frame period - 2 ticks on.
+                    if (options.waitOutDelay !== false) await this.untilTick(s.tick + period - EFFECT_LAG_TICKS);
                     return { success: true, message: `Cast ${resolved.name ?? resolved.id} on ${target.name}: ${gained} Magic XP`, xpGained: gained, item: target.name, castTick: s.tick, periodTicks: period, retries: attempt };
                 }
                 const refusal = s.gameMessages.find(m => (m.tick ?? 0) > msgFrom && /do not have enough|don't have enough|need a magic level|level to cast|can't use|cannot be (turned|used)|coins/i.test(m.text));
@@ -635,17 +771,58 @@ export class ProcessingActions {
     async withdrawMany(requests: WithdrawRequest[]): Promise<BankLoadResult> {
         const state = this.state();
         if (!state?.bank?.isOpen) return { success: false, message: 'Bank is not open', deposited: [], withdrawn: [], missing: [], reason: 'bank_not_open' };
+        const matches = (req: WithdrawRequest) => (it: { id: number; name: string }) => {
+            if (typeof req.item === 'number') return it.id === req.item;
+            const pattern = typeof req.item === 'string' ? exactNamePattern(req.item) : req.item;
+            pattern.lastIndex = 0;
+            return pattern.test(it.name);
+        };
         const withdrawn: Array<{ item: string; amount: number }> = [];
         const missing: string[] = [];
+        const resolved: Array<{ req: WithdrawRequest; bank: { id: number; name: string; count: number; slot: number } }> = [];
         for (const req of requests) {
-            const pattern = typeof req.item === 'string' ? exactNamePattern(req.item) : req.item;
-            const inBank = this.state()?.bank.items.find(i => { pattern.lastIndex = 0; return pattern.test(i.name); });
-            if (!inBank) { missing.push(String(req.item)); continue; }
-            const before = countInventory(this.state()!.inventory, pattern);
-            const r = await this.bot.withdrawItem(inBank, req.amount, { asNote: req.asNote });
-            const got = countInventory(this.state()!.inventory, req.asNote ? new RegExp(pattern.source, pattern.flags) : pattern) - before;
-            if (!r.success && got <= 0) { missing.push(String(req.item)); continue; }
-            withdrawn.push({ item: inBank.name, amount: Math.max(got, 0) });
+            const inBank = state.bank.items.find(i => matches(req)(i) && i.count > 0);
+            if (!inBank) missing.push(String(req.item)); else resolved.push({ req, bank: inBank });
+        }
+        // Fast path for items (not notes): every amount as Withdraw-All/10/5/1 buttons, no count prompt, up to 5
+        // packets a tick across the requests, then one wait for everything to arrive. A Withdraw-X costs a count-dialog
+        // round trip (about 3 ticks) per item.
+        const fast = resolved.filter(r => !r.req.asNote);
+        if (fast.length) {
+            if (state.bank.noteMode) {
+                await this.sdk.sendClickComponent(5387); // bank_main item mode
+                try { await this.sdk.waitForCondition(s => !s.bank.noteMode, ticksToMs(this.sdk, 5)); } catch { /* the slow path re-checks */ }
+            }
+            const before = new Map(fast.map(r => [r.bank.id, countInventory(this.state()!.inventory, byIdTarget(r.bank.id))]));
+            const want = new Map(fast.map(r => [r.bank.id, r.req.amount < 0 || r.req.amount >= r.bank.count ? r.bank.count : r.req.amount]));
+            // Highest bank slot first: a Withdraw-All empties its slot and shifts every later one down, never an earlier one.
+            const packets = fast.flatMap(r => withdrawPackets(r.req.amount, r.bank.count).map(amount => ({ slot: r.bank.slot, amount })))
+                .sort((a, b) => b.slot - a.slot);
+            let tick = this.state()!.tick;
+            for (let i = 0; i < packets.length; i += MAX_OPS_PER_TICK) {
+                if (i > 0) { const f = await this.frameAfter(tick); if (f) tick = f.tick; }
+                await Promise.all(packets.slice(i, i + MAX_OPS_PER_TICK).map(p => this.sdk.sendBankWithdraw(p.slot, p.amount)));
+            }
+            const arrived = (s: BotWorldState) => fast.every(r => countInventory(s.inventory, byIdTarget(r.bank.id)) - before.get(r.bank.id)! >= want.get(r.bank.id)!);
+            try { await this.sdk.waitForCondition(arrived, ticksToMs(this.sdk, EFFECT_LAG_TICKS + 6)); } catch { /* a full bag or a short stack: the slow path tops up below */ }
+            for (const r of fast) {
+                const got = countInventory(this.state()!.inventory, byIdTarget(r.bank.id)) - before.get(r.bank.id)!;
+                const short = want.get(r.bank.id)! - got;
+                if (short > 0 && (this.state()!.inventory.length < 28)) {
+                    const bankNow = this.state()!.bank.items.find(i => i.id === r.bank.id);
+                    if (bankNow) await this.bot.withdrawItem(bankNow, short);
+                }
+                const total = countInventory(this.state()!.inventory, byIdTarget(r.bank.id)) - before.get(r.bank.id)!;
+                if (total > 0) withdrawn.push({ item: r.bank.name, amount: total }); else missing.push(String(r.req.item));
+            }
+        }
+        for (const r of resolved.filter(x => x.req.asNote)) {
+            const held = (inv: readonly InventoryItem[]) => inv.filter(i => i.name === r.bank.name).reduce((n, i) => n + i.count, 0);
+            const before = held(this.state()!.inventory);
+            const res = await this.bot.withdrawItem(r.bank as never, r.req.amount, { asNote: true });
+            const got = held(this.state()!.inventory) - before;
+            if (!res.success && got <= 0) { missing.push(String(r.req.item)); continue; }
+            withdrawn.push({ item: r.bank.name, amount: Math.max(got, 0) });
         }
         const ok = missing.length === 0;
         return {

@@ -70,6 +70,7 @@ import { PRAYER_INDICES, PRAYER_NAMES, PRAYER_LEVELS } from './types';
 import type {
     BankLoadResult,
     BurstResult,
+    ChainStep,
     CastOnItemResult,
     CraftRunesResult,
     CrossObstacleResult,
@@ -169,6 +170,25 @@ export class BotActions {
     }
 
     /**
+     * Run a chain of no-delay steps over one load in the same ticks, up to
+     * `perTick` (default 5) sends a tick: identify herbs, then herb on vial, then
+     * the secondary on the unfinished potion. Each tick fills its sends from the
+     * latest step with items ready first, so products move down the chain as soon
+     * as the frame shows them, instead of one burst per step each waiting out the
+     * two-tick effect lag. Same report and stops as useItemOnItem.
+     * ```ts
+     * await bot.useItemChain([
+     *     { kind: 'op', item: /^herb$/i, option: 'Identify' },
+     *     { kind: 'combine', source: 'Ranarr weed', target: 'Vial of water' },
+     *     { kind: 'combine', source: 'Snape grass', target: 'Unfinished potion' },
+     * ], { times: 27 });
+     * ```
+     */
+    async useItemChain(steps: ChainStep[], options: { perTick?: number; times?: number; timeoutTicks?: number; stallTicks?: number } = {}): Promise<BurstResult> {
+        return this.processing.useItemChain(steps, options);
+    }
+
+    /**
      * Click an inventory option ('Bury', 'Identify', 'Clean', or an op index) on
      * every matching item, up to `max`. With `perTick` above 1 it bursts like
      * useItemOnItem (no-delay ops such as identifying herbs). By default it paces
@@ -193,8 +213,9 @@ export class BotActions {
      * Make `amount` of a product from a skill's "What would you like to make?"
      * dialog (fletching, spinning, any `skill_multi` menu). Clicks the product's
      * Make 1/5/10 button, or Make X and then answers the count prompt, then
-     * watches the XP: each tick it rises is one product. If the run stops early
-     * (a level-up interrupts it) it reopens the dialog with `open` and goes on.
+     * watches the XP: each tick it rises is one product. A level-up box ends the
+     * server's run; it then closes the box, reopens the dialog with `open` and goes
+     * on, until `amount` are made or two reopened runs make nothing.
      * `open` is a function, `{ use, on }` (item on item), `{ use, onLoc }` (item on
      * a loc) or `{ loc, option }` (a loc option such as a spinning wheel's Spin);
      * without it the dialog must already be open.
@@ -236,7 +257,7 @@ export class BotActions {
      * lvl3'). Succeeds on the Magic XP. Then, by default, it waits out the spell's
      * delay (High Alchemy lands one per 5 ticks, the others one per 3), so the
      * next call's cast is accepted rather than dropped; a cast that shows no XP
-     * within 2 ticks is sent again (up to `tries`).
+     * within 3 ticks is sent again (up to `tries`).
      * ```ts
      * const r = await bot.castOnItem('high alchemy', /^yew longbow$/i);
      * ```
@@ -4389,8 +4410,18 @@ export class BotActions {
         const clickLost = (s: State) =>
             s.dialog.isOpen ||
             (!anvilOpen(s) && s.tick - clickTick >= NOTHING_HAPPENED_TICKS && (s.player?.animId ?? -1) === -1);
+        // A click sent while the player is still delayed (the last item's p_delay) is dropped and the anvil stays
+        // open: click again once, rather than waiting out the whole timeout.
+        let lastClick = clickTick, reclicks = 0;
+        const unsub = this.sdk.onStateUpdate(s => {
+            if (reclicks < 2 && anvilOpen(s) && !smithed(s) && s.tick - lastClick >= 4 && (s.player?.animId ?? -1) === -1) {
+                reclicks++;
+                lastClick = s.tick;
+                void this.sdk.sendClickComponentWithOption(componentId, count === 10 ? 3 : count === 5 ? 2 : 1, componentSlot);
+            }
+        });
         try {
-            const s = await this.sdk.waitForCondition(s => smithed(s) || refusal(s) !== null || clickLost(s), timeout);
+            const s = await this.sdk.waitForCondition(s => smithed(s) || refusal(s) !== null || clickLost(s), timeout).finally(unsub);
             if (smithed(s)) return succeeded(s);
             const refused = refusal(s);
             if (refused) return { result: refused };
@@ -4406,8 +4437,8 @@ export class BotActions {
 
     /**
      * After the first item of a make-5/10 smith: wait while the rest are made
-     * (about 5 ticks each), until `count` items, the bars run out, or 10 ticks
-     * pass with no Smithing XP (a level-up box stops the run).
+     * (about 5 ticks each), until `count` items, the bars run out, a level-up
+     * box stops the run, or 10 ticks pass with no Smithing XP.
      */
     private async _smithRest(first: SmithResult, barId: number, count: number, findSmithedItem: () => InventoryItem | null): Promise<SmithResult> {
         let made = 1;
@@ -4424,6 +4455,8 @@ export class BotActions {
             const now = s.skills.find(k => k.name === 'Smithing')?.experience || 0;
             if (now > xp) { made++; gained += now - xp; xp = now; quiet = 0; } else quiet++;
             if (!s.inventory.some(i => i.id === barId)) break;
+            // A level-up box ends the run: report what was made now rather than waiting out the quiet ticks.
+            if (s.dialog.isOpen && quiet >= 2) break;
         }
         return { ...first, message: `Smithed ${made} item${made === 1 ? '' : 's'}`, xpGained: gained, itemsSmithed: made, product: findSmithedItem() || first.product };
     }
@@ -5365,7 +5398,8 @@ export class BotActions {
 
     /** Wait until a spell cast on `castTick` has finished its delay (`periodTicks` between accepted casts). */
     private async waitOutSpellDelay(castTick: number, periodTicks: number): Promise<void> {
-        const until = castTick + periodTicks - 1;
+        // The XP frame comes a tick after the cast ran, so the next cast can go after the frame periodTicks - 2 ticks on.
+        const until = castTick + periodTicks - 2;
         if ((this.sdk.getState()?.tick ?? until) >= until) return;
         try {
             await this.sdk.waitForCondition(s => s.tick >= until, ticksToMs(this.sdk, periodTicks + 5));

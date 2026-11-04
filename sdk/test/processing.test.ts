@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { BotSDK } from '../index';
 import { BotActions } from '../actions';
-import { matchInventory, pickForSend, resolveMakeButton, resolveSpell, sideCapacity } from '../processing';
+import { matchInventory, pickForSend, resolveMakeButton, resolveSpell, sideCapacity, withdrawPackets } from '../processing';
 import type { BurstResult, InventoryItem, PacedResult } from '../types';
 
 // A fake server: a new state object every tick (as real frames are), up to 5
 // player packets applied per tick, and ops sent while the player is delayed
-// dropped with only opFeedback.opRejectedCount moving.
+// dropped with only opFeedback.opRejectedCount moving. As measured on a real
+// server, an op sent after the frame for tick T runs on tick T+1 and first shows
+// in the frame for T+2; the client's own inventory is already up to date, so it
+// refuses a send on a slot it sees empty.
 
 type Op = { kind: 'combine'; src: number; dst: number } | { kind: 'use'; slot: number; op: number } | { kind: 'spell'; slot: number; spell: number };
 interface World {
@@ -54,6 +57,9 @@ function harness(world: World, rules: {
     const apply = (outcome: boolean | 'reject' | undefined) => { if (outcome === 'reject' || outcome === false) world.rejected++; };
     const step = () => {
         world.tick++;
+        // Publish the world as the last tick left it, then run this tick's packets (shown next frame).
+        internal.state = frame();
+        for (const l of internal.stateListeners) l(internal.state);
         const batch = queue.splice(0, rules.perTickLimit ?? 5);
         perTickSends.push(batch.length);
         for (const op of batch) {
@@ -69,11 +75,13 @@ function harness(world: World, rules: {
                 apply(a && rules.spell ? rules.spell(world, a, op.spell) : false);
             }
         }
-        internal.state = frame();
-        for (const l of internal.stateListeners) l(internal.state);
     };
     const ok = async () => ({ success: true, message: 'dispatched' });
-    sdk.sendUseItemOnItem = async (src: number, dst: number) => { queue.push({ kind: 'combine', src, dst }); return ok(); };
+    sdk.sendUseItemOnItem = async (src: number, dst: number) => {
+        if (!bySlot(src) || !bySlot(dst)) return { success: false, message: 'Failed to use item on item' };
+        queue.push({ kind: 'combine', src, dst });
+        return ok();
+    };
     sdk.sendUseItem = async (slot: number, op = 1) => { queue.push({ kind: 'use', slot, op }); return ok(); };
     sdk.sendSpellOnItem = async (slot: number, spell: number) => { queue.push({ kind: 'spell', slot, spell }); return ok(); };
     timers.push(setInterval(step, 4));
@@ -107,7 +115,8 @@ describe('pure helpers', () => {
 
     test('make buttons: the quantity run just before the named product', () => {
         const options = ['Make X', 'Make 10', 'Make 5', 'Short Bow', 'Make X', 'Make 10', 'Make 5', 'Long Bow'].map((text, i) => ({ index: i + 1, text }));
-        expect(resolveMakeButton(options, 'long bow', 27)).toMatchObject({ option: { index: 5 }, count: 27 });
+        expect(resolveMakeButton(options, 'long bow', 7)).toMatchObject({ option: { index: 5 }, count: 7 });
+        expect(resolveMakeButton(options, 'long bow', 27)).toMatchObject({ option: { index: 6 }, count: null });
         expect(resolveMakeButton(options, 'long bow', 5)).toMatchObject({ option: { index: 7 }, count: null });
         expect(resolveMakeButton(options, 'short', 10)).toMatchObject({ option: { index: 2 }, count: null });
         expect(resolveMakeButton(options, 'short', 1)).toMatchObject({ option: { index: 4 }, count: null });
@@ -181,6 +190,34 @@ describe('useItemOnItem bursts', () => {
         (h.sdk as any).state.bank.isOpen = true;
         const r = await h.bot.useItemOnItem('Arrow shaft', 'Feather', { times: 2, perTick: 5 });
         expect(r).toMatchObject({ success: false, reason: 'modal_open', sent: 0 });
+    });
+});
+
+describe('useItemChain', () => {
+    test('identify, mix and finish share the ticks, 5 sends at most, and every herb becomes a potion', async () => {
+        const herbs = Array.from({ length: 4 }, (_, i) => item(207, 'Herb', i, 1, ['Identify']));
+        const vials = Array.from({ length: 4 }, (_, i) => item(227, 'Vial of water', 4 + i));
+        const snape = Array.from({ length: 4 }, (_, i) => item(231, 'Snape grass', 8 + i));
+        const h = harness({ tick: 100, inventory: [...herbs, ...vials, ...snape], xp: { Herblore: 0 }, rejected: 0, delayedUntil: 0, dialog: { isOpen: false, options: [] } }, {
+            use: (w, it) => { if (it.id !== 207) return false; it.id = 257; it.name = 'Ranarr weed'; it.optionsWithIndex = []; w.xp.Herblore! += 187.5; return true; },
+            combine: (w, a, b) => {
+                if (a.id === 257 && b.id === 227) { removeOne(w, a); b.id = 99; b.name = 'Unfinished potion'; return true; }
+                if (a.id === 231 && b.id === 99) { removeOne(w, a); b.id = 139; b.name = 'Prayer potion(3)'; w.xp.Herblore! += 2187.5; return true; }
+                return false;
+            },
+        });
+        const r = await h.bot.useItemChain([
+            { kind: 'op', item: /^herb$/i, option: 'Identify' },
+            { kind: 'combine', source: /^ranarr weed$/i, target: /^vial of water$/i },
+            { kind: 'combine', source: /^snape grass$/i, target: /^unfinished potion$/i },
+        ], { times: 12 });
+        expect(r.sent).toBe(12);
+        expect(r.rejected).toBe(0);
+        expect(Math.max(...r.perTick.map(t => t.sent))).toBeLessThanOrEqual(5);
+        expect(h.world.inventory.filter(i => i.id === 139).length).toBe(4);
+        expect(r.xpGained).toBe(4 * (187.5 + 2187.5));
+        // Pipelined: fewer send ticks than three separate bursts of 4 (one tick each, each waiting out the lag).
+        expect(r.perTick.length).toBeLessThanOrEqual(6);
     });
 });
 
@@ -299,18 +336,30 @@ describe('bank loads', () => {
         expect(deposits).toEqual(['Maple longbow (u)', 'Bow string']);
     });
 
-    test('withdrawMany reports what the bank lacks', async () => {
+    test('withdrawMany sends button amounts (no count prompt), highest bank slot first, and reports what the bank lacks', async () => {
         const h = harness({ tick: 100, inventory: [], xp: {}, rejected: 0, delayedUntil: 0, dialog: { isOpen: false, options: [] } }, {});
-        const st = (h.sdk as any).state;
-        st.bank = { isOpen: true, items: [{ id: 1517, name: 'Maple logs', count: 100, slot: 0 }], noteMode: false };
-        h.bot.withdrawItem = async (_it: any, amount: number) => {
-            const now = (h.sdk as any).state;
-            now.inventory = Array.from({ length: amount }, (_, i) => item(1517, 'Maple logs', i));
-            return { success: true, message: 'ok' } as any;
+        const bankItems = [{ id: 227, name: 'Vial of water', count: 100, slot: 0 }, { id: 1517, name: 'Maple logs', count: 100, slot: 1 }, { id: 231, name: 'Snape grass', count: 9, slot: 2 }];
+        (h.sdk as any).state.bank = { isOpen: true, items: bankItems, noteMode: false };
+        const sent: { slot: number; amount: number }[] = [];
+        h.sdk.sendBankWithdraw = async (slot: number, amount: number) => {
+            sent.push({ slot, amount });
+            const b = bankItems.find(i => i.slot === slot)!;
+            const n = amount === -1 ? b.count : amount;
+            for (let k = 0; k < n; k++) h.world.inventory.push(item(b.id, b.name, h.world.inventory.length));
+            return { success: true, message: 'ok' };
         };
-        const r = await h.bot.withdrawMany([{ item: /^maple logs$/i, amount: 27 }, { item: /^bow string$/i, amount: 1 }]);
-        expect(r.success).toBe(false);
-        expect(r.withdrawn).toEqual([{ item: 'Maple logs', amount: 27 }]);
+        const r = await h.bot.withdrawMany([{ item: 227, amount: 9 }, { item: /^snape grass$/i, amount: 9 }, { item: /^bow string$/i, amount: 1 }]);
+        expect(sent.map(p => p.amount)).toEqual([-1, 5, 1, 1, 1, 1]);
+        expect(sent.map(p => p.slot)).toEqual([2, 0, 0, 0, 0, 0]);
+        expect(r.withdrawn).toEqual([{ item: 'Vial of water', amount: 9 }, { item: 'Snape grass', amount: 9 }]);
         expect(r.missing).toEqual(['/^bow string$/i']);
+        expect(r.success).toBe(false);
+    });
+
+    test('withdraw buttons', () => {
+        expect(withdrawPackets(9, 100)).toEqual([5, 1, 1, 1, 1]);
+        expect(withdrawPackets(27, 100)).toEqual([10, 10, 5, 1, 1]);
+        expect(withdrawPackets(28, 20)).toEqual([-1]);
+        expect(withdrawPackets(-1, 20)).toEqual([-1]);
     });
 });

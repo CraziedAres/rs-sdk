@@ -1049,6 +1049,11 @@ export interface BurstResult {
     fellBackToOnePerTick?: boolean;
 }
 
+/** One step of bot.useItemChain: an inventory option on every match, or one item used on another. */
+export type ChainStep =
+    | { kind: 'op'; item: InventoryItem | string | RegExp; option: string | RegExp | number }
+    | { kind: 'combine'; source: InventoryItem | string | RegExp; target: InventoryItem | string | RegExp; keep?: 'source' | 'target' | 'both' };
+
 export interface PacedResult {
     success: boolean;
     message: string;
@@ -1099,7 +1104,8 @@ export interface CastOnItemResult {
 }
 
 export interface WithdrawRequest {
-    item: string | RegExp;
+    /** A name (exact, any case), a pattern, or an item id (for items that share a name, e.g. every unidentified herb is "Herb"). */
+    item: string | RegExp | number;
     /** -1 for all. */
     amount: number;
     asNote?: boolean;
