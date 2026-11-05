@@ -124,6 +124,10 @@ const NEVER_AUTO_CLOSE = new Set([
  * op costs one attempt instead of the 10s action timeout.
  */
 const PICKPOCKET_ACK_TICKS = 3;
+/** walkTo: the longest straight-line segment (tiles, Chebyshev) one walk click covers when no door is in the way. */
+const WALK_SEGMENT_TILES = 16;
+/** walkTo: the next segment is clicked this close to the current target, so a running player never stops between segments. */
+const WALK_LOOKAHEAD_TILES = 3;
 
 /** The logout tab's button, `logout:try_logout` in content/pack/interface.pack. */
 const LOGOUT_BUTTON_COMPONENT = 2458;
@@ -1514,7 +1518,8 @@ export class BotActions {
             // Walk waypoints
             let consecutiveStuck = 0;
 
-            for (const wp of path.waypoints) {
+            for (let wi = 0; wi < path.waypoints.length; wi++) {
+                let wp = path.waypoints[wi]!;
                 const stale = await ensureFreshState();
                 if (stale) return stale;
                 // Proactively open doors the path requires — only when we're close enough to see them
@@ -1579,8 +1584,18 @@ export class BotActions {
                 // tolerance of 0/1 can never be met: the stepper reported
                 // "arrived" up to 2 tiles short, the outer check kept failing,
                 // and walkTo ended in "Stuck at" on open ground.
-                const isFinalWp = wp === path.waypoints[path.waypoints.length - 1];
-                const wpTolerance = isFinalWp ? Math.min(2, tolerance) : 2;
+                // One click per turn point stops the player at each one: the stepper waits to arrive, and only then
+                // sends the next walk, so a running player halts for about a tick per turn (measured: a 110-tile walk
+                // with 33 turn points took 85-90 ticks, not 55). With no door left to open on the path, click the
+                // farthest turn point within WALK_SEGMENT_TILES (the client routes to it itself), and send the next
+                // click from WALK_LOOKAHEAD_TILES out, while the player is still moving.
+                if (requiredDoorKeys.size === 0) {
+                    while (wi + 1 < path.waypoints.length
+                        && this.helpers.distance(pos.x, pos.z, path.waypoints[wi + 1]!.x, path.waypoints[wi + 1]!.z) <= WALK_SEGMENT_TILES) wi++;
+                    wp = path.waypoints[wi]!;
+                }
+                const isFinalWp = wi === path.waypoints.length - 1;
+                const wpTolerance = isFinalWp ? Math.min(2, tolerance) : WALK_LOOKAHEAD_TILES;
                 const result = await this.helpers.walkStepToward(wp.x, wp.z, wpTolerance, pos);
                 pos = result.pos;
                 const deadMidStep = diedEnRoute();
