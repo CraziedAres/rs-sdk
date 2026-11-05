@@ -55,7 +55,7 @@ export function normaliseComponentText(raw: string | null | undefined): string {
 
 // ============================================================ interactions
 
-export function interactLoc(c: LiteClient, worldX: number, worldZ: number, locId: number, optionIndex: number): ClientActionResult {
+export function interactLoc(c: LiteClient, worldX: number, worldZ: number, locId: number, optionIndex: number, route = true): ClientActionResult {
     if (!c.isInGame() || !c.localPlayer) {
         return { success: false, reason: 'not_in_game' };
     }
@@ -79,7 +79,9 @@ export function interactLoc(c: LiteClient, worldX: number, worldZ: number, locId
     // tiles the routefinder can never reach, and the server owns the reach
     // check anyway - worst case it answers "I can't reach that!" instead of
     // us aborting silently.
-    const routed = c.routeToLoc(dest.x, dest.z, locId);
+    // route=false: no MOVE packet; the server checks reach from where the player stands (a loc used from inside its
+    // own footprint, such as a long rope swing, whose nearest edge the routefinder would walk to instead).
+    const routed = route ? c.routeToLoc(dest.x, dest.z, locId) : false;
 
     c.writeOpcode([ClientProt.OPLOC1, ClientProt.OPLOC2, ClientProt.OPLOC3, ClientProt.OPLOC4, ClientProt.OPLOC5][optionIndex - 1]);
     c.out.p2(worldX);
@@ -296,7 +298,7 @@ export function useItemOnNpc(c: LiteClient, itemSlot: number, npcIndex: number, 
     return { success: true, routed };
 }
 
-export function useItemOnLoc(c: LiteClient, itemSlot: number, worldX: number, worldZ: number, locId: number, interfaceId: number = INVENTORY_INTERFACE_ID): ClientActionResult {
+export function useItemOnLoc(c: LiteClient, itemSlot: number, worldX: number, worldZ: number, locId: number, interfaceId: number = INVENTORY_INTERFACE_ID, route = true): ClientActionResult {
     if (!c.isInGame() || !c.localPlayer) {
         return { success: false, reason: 'not_in_game' };
     }
@@ -312,8 +314,8 @@ export function useItemOnLoc(c: LiteClient, itemSlot: number, worldX: number, wo
         return { success: false, reason: 'target_not_found' };
     }
     // Attempt the route, but always dispatch (see interactLoc): aplocu ops
-    // trigger at range and the server owns the reach check.
-    const routed = c.routeToLoc(dest.x, dest.z, locId);
+    // trigger at range and the server owns the reach check. route=false: no MOVE at all.
+    const routed = route ? c.routeToLoc(dest.x, dest.z, locId) : false;
 
     c.writeOpcode(ClientProt.OPLOCU);
     c.out.p2(worldX);

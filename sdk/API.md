@@ -25,9 +25,10 @@
 | `async castOnItem(spell: number \| string, item: InventoryItem \| string \| RegExp, options: { waitOutDelay?: boolean; tries?: number; timeoutTicks?: number } = {}): Promise<CastOnItemResult>` | Cast a spell on an inventory item: High/Low Alchemy, the enchants, Superheat. `spell` is a `Spells` id or a name ('high alchemy', 'HIGH_ALCHEMY', 'enchant lvl3'). Succeeds on the Magic XP. Then, by default, it waits out the spell's delay (High Alchemy lands one per 5 ticks, the others one per 3), so the next call's cast is accepted rather than dropped; a cast that shows no XP within 3 ticks is sent again (up to `tries`). ```ts const r = await bot.castOnItem('high alchemy', /^yew longbow$/i); ``` |
 | `async depositAllExcept(keep: Array<string \| RegExp>): Promise<BankLoadResult>` | With the bank open, deposit every carried item except those matching `keep` (tools, runes), one deposit-all per item kind. ```ts await bot.depositAllExcept([/knife/i, /^nature rune$/i]); ``` |
 | `async withdrawMany(requests: WithdrawRequest[]): Promise<BankLoadResult>` | With the bank open, withdraw several items in one visit. Reports what arrived per item and which requests the bank couldn't fill (`missing`). ```ts await bot.withdrawMany([{ item: /^maple logs$/i, amount: 27 }]); ``` |
-| `async crossObstacle(loc: NearbyLoc \| string \| RegExp, option: string \| RegExp \| number = 1, expect: { to?: { x: number; z: number }; xp?: boolean; timeoutTicks?: number } = {}): Promise<CrossObstacleResult>` | Cross an agility obstacle or shortcut: interact with `option`, then wait until the player stands within a tile of `expect.to` and/or Agility XP lands (`expect.xp`, the default when no tile is given). A failed obstacle (HP lost, not where expected) is `reason: 'failed'`. |
+| `async crossObstacle(loc: NearbyLoc \| string \| RegExp, option: string \| RegExp \| number = 1, expect: { to?: { x: number; z: number }; xp?: boolean; timeoutTicks?: number; route?: boolean } = {}): Promise<CrossObstacleResult>` | Cross an agility obstacle or shortcut: interact with `option`, then wait until the player stands within a tile of `expect.to` and/or Agility XP lands (`expect.xp`, the default when no tile is given). A failed obstacle (HP lost, not where expected) is `reason: 'failed'`. |
 | `async enterRuins(talisman: InventoryItem \| string \| RegExp = /talisman$/i, options: { ruins?: NearbyLoc \| string \| RegExp; timeoutTicks?: number } = {}): Promise<EnterRuinsResult>` | Enter a runecrafting altar: use the talisman on the mysterious ruins (or 'Enter' them when no talisman is carried, e.g. with a tiara worn), then wait for the teleport inside. |
 | `async craftRunes(options: { altar?: NearbyLoc \| string \| RegExp; essence?: InventoryItem \| string \| RegExp; timeoutTicks?: number } = {}): Promise<CraftRunesResult>` | Craft the carried essence into runes at the altar inside the ruins; succeeds on Runecraft XP with essence used. |
+| `async teleport(spell: number \| string, options: { timeoutTicks?: number } = {}): Promise<TeleportResult>` | Cast a teleport spell (`Spells.CAMELOT_TELEPORT` or its name) and wait until the player lands; a refusal (runes, level) comes back with the game's message. |
 
 ### Other
 
@@ -35,7 +36,7 @@
 |---|---|
 | `async dropItems(target: InventoryItem \| string \| RegExp, options: { max?: number; perTick?: number; timeoutTicks?: number } = {}): Promise<BurstResult>` | Drop every matching inventory slot, up to 5 a tick (no delay on dropping), each slot checked by its effect frame. `bot.dropItem` drops one slot and waits for it, about 2 ticks a slot; this clears a full bag of logs in about 7. ```ts const r = await bot.dropItems(/^willow logs$/i); ``` |
 | `async logout(options: { timeoutTicks?: number } = {}): Promise<LogoutResult>` | Log out with the game's logout button (component 2458, `logout:try_logout`), so the server saves the character and removes it from the world. Closing the client's socket instead leaves the player in the world until the idle logout, 500 ticks later. Succeeds only once the session is seen to end: the gateway reports the game client gone (a lite runner exits, with code 6), a state arrives with `inGame: false` (a browser client), or the gateway's status shows the bot dead or out of game. Fails with reason `in_combat` when the server answers "You can't log out until 10 seconds after the end of combat" (16 ticks after the last hit; the player stays logged in), `not_logged_in` when no game session is attached, and `timeout` when the session is not seen to end within `timeoutTicks` game ticks (default 50). The server's other refusals (a duel, a gnomeball pitch) fail with no reason and the server's text as the message. |
-| `async useItemOnLoc(item: InventoryItem \| string \| RegExp, loc: NearbyLoc \| string \| RegExp, options: { timeout?: number } = {}): Promise<UseItemOnLocResult>` | Use an inventory item on a nearby location (e.g., fish on range, ore on furnace). Walks to the location first (handling doors), then uses the item. |
+| `async useItemOnLoc(item: InventoryItem \| string \| RegExp, loc: NearbyLoc \| string \| RegExp, options: { timeout?: number; route?: boolean } = {}): Promise<UseItemOnLocResult>` | Use an inventory item on a nearby location (e.g., fish on range, ore on furnace). Walks to the location first (handling doors), then uses the item. |
 | `async useItemOnNpc(item: InventoryItem \| string \| RegExp, npc: NearbyNpc \| string \| RegExp, options: { timeout?: number } = {}): Promise<UseItemOnNpcResult>` | Use an inventory item on a nearby NPC (e.g., bones on altar keeper, item on NPC). Walks to the NPC first (handling doors), then uses the item. |
 | `async dropItem(target: InventoryItem \| string \| RegExp, amount: number \| 'all' = 'all'): Promise<DropItemResult>` | Drop inventory items by name, waiting for each drop to land before sending the next. `sendDropItem` on a slot the server has already emptied silently no-ops, so slot loops built on stale state lose most of their sends; this re-resolves the slot from fresh state every time. `amount` counts inventory slots (a whole stack drops as one). Pass `'all'` or `-1` to drop every matching slot. |
 | `async closeInterface(timeout: number = 5000): Promise<ActionResult>` | Close any open modal interface (bank, book, quest scroll, etc.). |
@@ -85,7 +86,7 @@
 | Signature | Description |
 |---|---|
 | `async talkTo(target: NearbyNpc \| string \| RegExp): Promise<TalkResult>` | Talk to an NPC and wait for dialog to open. Walks to the NPC first (handling doors). |
-| `async interactLoc(target: NearbyLoc \| string \| RegExp, option: number \| string \| RegExp = 1): Promise<InteractLocResult>` | Interact with a nearby location object (rock, fishing spot, furnace, etc.). Walks to the target first (handling doors), sends the interaction, then waits for an effect produced after the click (an animation starting, a dialog or interface opening, XP or an item gained, the loc changing) or detects failure when the player has been idle for 2 ticks with nothing happening. An animation left over from the previous action does not count. Success can mean the action started, before its product arrives; use mineRock for completed mining. |
+| `async interactLoc(target: NearbyLoc \| string \| RegExp, option: number \| string \| RegExp = 1, options: { route?: boolean } = {}): Promise<InteractLocResult>` | Interact with a nearby location object (rock, fishing spot, furnace, etc.). Walks to the target first (handling doors), sends the interaction, then waits for an effect produced after the click (an animation starting, a dialog or interface opening, XP or an item gained, the loc changing) or detects failure when the player has been idle for 2 ticks with nothing happening. An animation left over from the previous action does not count. Success can mean the action started, before its product arrives; use mineRock for completed mining. |
 | `async interactNpc(target: NearbyNpc \| string \| RegExp, option: number \| string \| RegExp = 1): Promise<InteractNpcResult>` | Interact with a nearby NPC using a specified option (e.g. "Trade", "Pickpocket", "Fish"). Walks to the NPC first (handling doors), sends the interaction, then waits for an effect produced after the click (an animation starting, a dialog or interface opening, XP or an item gained) or detects failure when the player has been idle for 2 ticks with nothing happening. An animation left over from the previous action does not count. |
 | `async pickpocketNpc(target: NearbyNpc \| string \| RegExp): Promise<PickpocketResult>` | Pickpocket an NPC. Handles door retrying if path is blocked. |
 
@@ -93,7 +94,7 @@
 
 | Signature | Description |
 |---|---|
-| `async walkTo(x: number, z: number, tolerance: number = 3, options: { timeout?: number; timeoutTicks?: number } = {}): Promise<ActionResult>` | Walk to coordinates using pathfinding, auto-opening doors. Bounds the whole route with options.timeout in ms, else options.timeoutTicks game ticks (default 1200: 120 s at 100 ms/tick, 360 s at 300 ms/tick). Refuses stale state and aborts on cancellation or death. |
+| `async walkTo(x: number, z: number, tolerance: number = 3, options: { timeout?: number; timeoutTicks?: number; openDoors?: boolean } = {}): Promise<ActionResult>` | Walk to coordinates using pathfinding, auto-opening doors. Bounds the whole route with options.timeout in ms, else options.timeoutTicks game ticks (default 1200: 120 s at 100 ms/tick, 360 s at 300 ms/tick). Refuses stale state and aborts on cancellation or death. |
 
 ### Shopping
 
@@ -284,7 +285,7 @@
 | Signature | Description |
 |---|---|
 | `async sendWalk(x: number, z: number, running: boolean = true): Promise<ActionResult>` | Send walk command to coordinates. |
-| `async sendInteractLoc(x: number, z: number, locId: number, option: number = 1): Promise<ActionResult>` | Interact with a location (tree, rock, door, etc). |
+| `async sendInteractLoc(x: number, z: number, locId: number, option: number = 1, route: boolean = true): Promise<ActionResult>` | Interact with a location (tree, rock, door, etc). `route: false` sends the op without a client route: the server then checks reach from where the player stands (for a loc used from inside its own footprint). |
 | `async sendInteractNpc(npcIndex: number, option: number = 1): Promise<ActionResult>` | Interact with an NPC by index and option. |
 | `async sendInteractPlayer(playerIndex: number, option: number = 2): Promise<ActionResult>` | Interact with a player by index and option (1-5). Option 2 = Attack (wilderness), 3 = Follow, 4 = Trade. |
 | `async sendTalkToNpc(npcIndex: number): Promise<ActionResult>` | Talk to an NPC by index. |
@@ -293,7 +294,7 @@
 | `async sendUseEquipmentItem(slot: number, option: number = 1): Promise<ActionResult>` | Use an equipped item (remove, operate, etc). |
 | `async sendDropItem(slot: number): Promise<ActionResult>` | Drop an inventory item. |
 | `async sendUseItemOnItem(sourceSlot: number, targetSlot: number): Promise<ActionResult>` | Use one inventory item on another. Rejected up front while a shop or bank modal is open: those replace the inventory tab, so the server drops the packet as "component not visible" and sends no message at all. Close the modal first — `bot.closeShop()`, `bot.closeInterface()`, or `sendCloseModal()`. |
-| `async sendUseItemOnLoc(itemSlot: number, x: number, z: number, locId: number): Promise<ActionResult>` | Use an inventory item on a location. |
+| `async sendUseItemOnLoc(itemSlot: number, x: number, z: number, locId: number, route: boolean = true): Promise<ActionResult>` | Use an inventory item on a location. |
 | `async sendUseItemOnNpc(itemSlot: number, npcIndex: number): Promise<ActionResult>` | Use an inventory item on an NPC. |
 | `async sendClickDialog(option: number = 0): Promise<ActionResult>` | Click a dialog option by its server-assigned index. IMPORTANT: `option` is the **server-assigned index** stored on each `DialogOption.index` field — NOT the array position in `dialog.options`. Server-assigned indices are 1-based: `dialog.options[0].index === 1`. Pass `0` only as the implicit "continue" click for dialogs with no selectable options (the common pattern: pass through narration pages). To click an option by its visible text, prefer `clickDialogByText()`, which also binds the click to its observed dialogue page. This low-level index method does not bind the click to a page. |
 | `async clickDialogByText(pattern: string \| RegExp): Promise<ActionResult>` | Click a dialog option whose visible text matches `pattern`. Convenience wrapper that resolves the server-assigned index for you, sidestepping the 1-based vs 0-based array-position confusion of `sendClickDialog()`. Matches against `DialogOption.text` (case-insensitive by default for string patterns). Binds the click to the observed page and component; it never falls back to an unguarded index when the page changes or the client is too old. |
@@ -1089,6 +1090,20 @@ interface EnterRuinsResult {
   message: string;
   position?: { x: number; z: number };
   reason?: 'no_talisman' | 'cant_reach' | 'no_effect' | 'timeout';
+}
+```
+
+### TeleportResult
+
+```typescript
+interface TeleportResult {
+  success: boolean;
+  message: string;
+  /** Where the player landed. */
+  position?: { x: number; z: number; level: number };
+  /** Magic XP the cast gave. */
+  xpGained?: number;
+  reason?: 'unknown_spell' | 'no_runes' | 'level_too_low' | 'refused' | 'modal_open' | 'timeout';
 }
 ```
 

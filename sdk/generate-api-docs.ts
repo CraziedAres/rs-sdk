@@ -132,7 +132,7 @@ function markdownCell(text: string): string {
 
 const PROCESSING_METHODS = new Set([
     'useItemOnItem', 'useItemChain', 'useInventoryItems', 'makeX', 'useItemOnLocX', 'castOnItem',
-    'depositAllExcept', 'withdrawMany', 'crossObstacle', 'enterRuins', 'craftRunes',
+    'depositAllExcept', 'withdrawMany', 'crossObstacle', 'enterRuins', 'craftRunes', 'teleport',
 ]);
 
 function methodCategory(name: string, surface: 'actions' | 'sdk'): string {

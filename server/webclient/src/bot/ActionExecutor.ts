@@ -99,7 +99,7 @@ export class ActionExecutor {
 
                 case 'interactLoc': {
                     const result = this.wrapClientAction(
-                        this.client.interactLoc(action.x, action.z, action.locId, action.optionIndex),
+                        this.client.interactLoc(action.x, action.z, action.locId, action.optionIndex, action.route !== false),
                         `Interacting with loc ${action.locId}`,
                         'Failed to interact with location'
                     );
@@ -184,7 +184,7 @@ export class ActionExecutor {
 
                 case 'useItemOnLoc': {
                     const result = this.wrapClientAction(
-                        this.client.useItemOnLoc(action.itemSlot, action.x, action.z, action.locId),
+                        this.client.useItemOnLoc(action.itemSlot, action.x, action.z, action.locId, undefined, action.route !== false),
                         `Using item on location`,
                         'Failed to use item on location'
                     );

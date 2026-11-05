@@ -22,8 +22,7 @@ function makeBot(start: { x: number; z: number }) {
     (bot as any).helpers.walkStepToward = async (tx: number, tz: number, tolerance: number) => {
         steps.push(tolerance);
         // The stepper stops as soon as it is within its tolerance, like the real one.
-        const dx = Math.sign(tx - pos.x), dz = Math.sign(tz - pos.z);
-        while (Math.max(Math.abs(tx - pos.x), Math.abs(tz - pos.z)) > tolerance) pos = { x: pos.x + dx, z: pos.z + dz };
+        while (Math.max(Math.abs(tx - pos.x), Math.abs(tz - pos.z)) > tolerance) pos = { x: pos.x + Math.sign(tx - pos.x), z: pos.z + Math.sign(tz - pos.z) };
         return { status: 'arrived' as const, pos: { ...pos } };
     };
     return { sdk, bot, steps, pos: () => pos };
@@ -32,12 +31,27 @@ function makeBot(start: { x: number; z: number }) {
 describe('walkTo tolerance', () => {
     test('tolerance 0 reaches the exact tile', async () => {
         const { sdk, bot, steps, pos } = makeBot({ x: 3200, z: 3200 });
-        (sdk as any).sendFindPath = async () => ({ success: true, reachedDestination: true, waypoints: [{ x: 3205, z: 3200 }, { x: 3210, z: 3200 }] });
-        const r = await bot.walkTo(3210, 3200, 0);
+        // Turn points more than one segment apart (16 tiles), so the first is walked on its own.
+        (sdk as any).sendFindPath = async () => ({ success: true, reachedDestination: true, waypoints: [{ x: 3220, z: 3200 }, { x: 3240, z: 3200 }] });
+        const r = await bot.walkTo(3240, 3200, 0);
         expect(r.success).toBe(true);
-        expect(pos()).toEqual({ x: 3210, z: 3200 });
-        // Intermediate waypoint keeps the loose 2-tile pass; the final one uses the caller's 0.
-        expect(steps).toEqual([2, 0]);
+        expect(pos()).toEqual({ x: 3240, z: 3200 });
+        // An intermediate waypoint is passed from 3 tiles out (the next click goes while moving); the final one uses the caller's 0.
+        expect(steps).toEqual([3, 0]);
+    });
+
+    test('turn points within one segment are walked as one click', async () => {
+        const { sdk, bot, steps, pos } = makeBot({ x: 3200, z: 3200 });
+        const clicks: { x: number; z: number }[] = [];
+        const step = (bot as any).helpers.walkStepToward;
+        (bot as any).helpers.walkStepToward = async (tx: number, tz: number, tolerance: number, last: { x: number; z: number }) => { clicks.push({ x: tx, z: tz }); return step(tx, tz, tolerance, last); };
+        (sdk as any).sendFindPath = async () => ({ success: true, reachedDestination: true, waypoints: [{ x: 3203, z: 3200 }, { x: 3206, z: 3203 }, { x: 3210, z: 3203 }, { x: 3230, z: 3203 }] });
+        const r = await bot.walkTo(3230, 3203, 0);
+        expect(r.success).toBe(true);
+        expect(pos()).toEqual({ x: 3230, z: 3203 });
+        // The first three are within 16 tiles of the start: one click to the third, then the last.
+        expect(clicks).toEqual([{ x: 3210, z: 3203 }, { x: 3230, z: 3203 }]);
+        expect(steps).toEqual([3, 0]);
     });
 
     test('tolerance 1 accepts a diagonally adjacent tile', async () => {

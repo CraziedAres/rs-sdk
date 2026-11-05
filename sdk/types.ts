@@ -657,14 +657,14 @@ export type BotAction =
     | { type: 'dropItem'; slot: number; reason: string }
     | { type: 'pickupItem'; x: number; z: number; itemId: number; reason: string }
     | { type: 'interactGroundItem'; x: number; z: number; itemId: number; optionIndex: number; reason: string }
-    | { type: 'interactLoc'; x: number; z: number; locId: number; optionIndex: number; reason: string }
+    | { type: 'interactLoc'; x: number; z: number; locId: number; optionIndex: number; reason: string; /** false: send the op with no client route (the server checks reach from where the player stands). */ route?: boolean }
     | { type: 'shopBuy'; slot: number; amount: number; reason: string }
     | { type: 'shopSell'; slot: number; amount: number; reason: string }
     | { type: 'closeShop'; reason: string }
     | { type: 'closeModal'; reason: string }
     | { type: 'setCombatStyle'; style: number; reason: string }
     | { type: 'useItemOnItem'; sourceSlot: number; targetSlot: number; reason: string }
-    | { type: 'useItemOnLoc'; itemSlot: number; x: number; z: number; locId: number; reason: string }
+    | { type: 'useItemOnLoc'; itemSlot: number; x: number; z: number; locId: number; reason: string; /** false: no client route (see interactLoc). */ route?: boolean }
     | { type: 'useItemOnNpc'; itemSlot: number; npcIndex: number; reason: string }
     | { type: 'say'; message: string; reason: string }
     | { type: 'privateMessage'; targetName: string; message: string; reason: string }
@@ -1134,6 +1134,16 @@ export interface EnterRuinsResult {
     message: string;
     position?: { x: number; z: number };
     reason?: 'no_talisman' | 'cant_reach' | 'no_effect' | 'timeout';
+}
+
+export interface TeleportResult {
+    success: boolean;
+    message: string;
+    /** Where the player landed. */
+    position?: { x: number; z: number; level: number };
+    /** Magic XP the cast gave. */
+    xpGained?: number;
+    reason?: 'unknown_spell' | 'no_runes' | 'level_too_low' | 'refused' | 'modal_open' | 'timeout';
 }
 
 export interface CraftRunesResult {
