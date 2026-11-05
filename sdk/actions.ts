@@ -792,7 +792,7 @@ export class BotActions {
     async useItemOnLoc(
         item: InventoryItem | string | RegExp,
         loc: NearbyLoc | string | RegExp,
-        options: { timeout?: number } = {}
+        options: { timeout?: number; route?: boolean } = {}
     ): Promise<UseItemOnLocResult> {
         const resolvedLoc = this.helpers.resolveLocation(loc, /./);
         return this.helpers.withDoorRetry(
@@ -806,9 +806,10 @@ export class BotActions {
     private async _useItemOnLocOnce(
         item: InventoryItem | string | RegExp,
         loc: NearbyLoc | string | RegExp,
-        options: { timeout?: number } = {}
+        options: { timeout?: number; route?: boolean } = {}
     ): Promise<UseItemOnLocResult> {
         const { timeout = ticksToMs(this.sdk, 100) } = options;
+        const route = options.route !== false;
 
         await this.dismissBlockingUI();
 
@@ -824,8 +825,8 @@ export class BotActions {
             return { success: false, message: `Location not found nearby: ${loc}`, reason: 'loc_not_found' };
         }
 
-        // Walk to the location first (handles doors)
-        if (resolvedLoc.distance > 2) {
+        // Walk to the location first (handles doors). route=false: an approach op used from where the player stands.
+        if (route && resolvedLoc.distance > 2) {
             const walkResult = await this.walkTo(resolvedLoc.x, resolvedLoc.z, 2);
             if (!walkResult.success) {
                 return { success: false, message: `Cannot reach ${resolvedLoc.name}: ${walkResult.message}`, reason: 'cant_reach' };
@@ -857,7 +858,7 @@ export class BotActions {
         const baseline = this.helpers.interactionBaseline();
 
         // Use the item on the location
-        const result = await this.sdk.sendUseItemOnLoc(resolvedItem.slot, locNow.x, locNow.z, locNow.id);
+        const result = await this.sdk.sendUseItemOnLoc(resolvedItem.slot, locNow.x, locNow.z, locNow.id, route);
         if (!result.success) {
             return { success: false, message: result.message };
         }
@@ -1374,18 +1375,22 @@ export class BotActions {
      * options.timeout in ms, else options.timeoutTicks game ticks (default 1200: 120 s at
      * 100 ms/tick, 360 s at 300 ms/tick). Refuses stale state and aborts on cancellation or death.
      */
-    async walkTo(x: number, z: number, tolerance: number = 3, options: { timeout?: number; timeoutTicks?: number } = {}): Promise<ActionResult> {
+    async walkTo(x: number, z: number, tolerance: number = 3, options: { timeout?: number; timeoutTicks?: number; openDoors?: boolean } = {}): Promise<ActionResult> {
         const timeout = options.timeout ?? ticksToMs(this.sdk, options.timeoutTicks ?? 1200);
         if (!Number.isFinite(timeout) || timeout <= 0 || !Number.isFinite(tolerance) || tolerance < 0) {
             return { success: false, message: 'walkTo requires a positive finite timeout and a non-negative finite tolerance' };
         }
-        return withExecutionDeadline(timeout, () => this._walkToRoute(x, z, tolerance), () => {
+        return withExecutionDeadline(timeout, () => this._walkToRoute(x, z, tolerance, options.openDoors !== false), () => {
             const player = this.sdk.getState()?.player;
             return { success: false, reason: 'timeout', message: `Walk timed out after ${timeout}ms: at (${player?.worldX}, ${player?.worldZ}), destination (${x}, ${z})` };
         });
     }
 
-    private async _walkToRoute(x: number, z: number, tolerance: number): Promise<ActionResult> {
+    /**
+     * `openDoors` false: never open a door on the way, neither proactively nor to get unstuck. For walks next to a door
+     * that teleports when opened (a one-way exit), where "opening a blocking door" ends the walk somewhere else.
+     */
+    private async _walkToRoute(x: number, z: number, tolerance: number, openDoors = true): Promise<ActionResult> {
         if (!Number.isFinite(x) || !Number.isFinite(z)) {
             // walkTo(undefined, undefined) used to be accepted and marched the
             // bot across the map (players expose coordinates as .x/.z).
@@ -1446,7 +1451,7 @@ export class BotActions {
 
         // Try to open a blocking door. Returns true if door was opened.
         const tryOpenDoor = async (): Promise<boolean> => {
-            if (doorRetryCount >= MAX_DOOR_RETRIES) return false;
+            if (!openDoors || doorRetryCount >= MAX_DOOR_RETRIES) return false;
             if (await this.helpers.tryOpenBlockingDoor()) {
                 doorRetryCount++;
                 await this.sdk.waitForTicks(1);
@@ -1521,7 +1526,7 @@ export class BotActions {
             lastPartialEnd = partial ? { x: endWp.x, z: endWp.z } : null;
 
             // Identify doors the path crosses through so we can open them proactively
-            const requiredDoors = findDoorsAlongPath(path.waypoints);
+            const requiredDoors = openDoors ? findDoorsAlongPath(path.waypoints) : [];
             const requiredDoorKeys = new Set(requiredDoors.map(d => `${d.x},${d.z}`));
 
             // Walk waypoints
@@ -1598,14 +1603,24 @@ export class BotActions {
                 // with 33 turn points took 85-90 ticks, not 55). With no door left to open on the path, click the
                 // farthest turn point within WALK_SEGMENT_TILES (the client routes to it itself), and send the next
                 // click from WALK_LOOKAHEAD_TILES out, while the player is still moving.
+                const firstWi = wi;
                 if (requiredDoorKeys.size === 0) {
                     while (wi + 1 < path.waypoints.length
                         && this.helpers.distance(pos.x, pos.z, path.waypoints[wi + 1]!.x, path.waypoints[wi + 1]!.z) <= WALK_SEGMENT_TILES) wi++;
                     wp = path.waypoints[wi]!;
                 }
-                const isFinalWp = wi === path.waypoints.length - 1;
-                const wpTolerance = isFinalWp ? Math.min(2, tolerance) : WALK_LOOKAHEAD_TILES;
-                const result = await this.helpers.walkStepToward(wp.x, wp.z, wpTolerance, pos);
+                let isFinalWp = wi === path.waypoints.length - 1;
+                let wpTolerance = isFinalWp ? Math.min(2, tolerance) : WALK_LOOKAHEAD_TILES;
+                let result = await this.helpers.walkStepToward(wp.x, wp.z, wpTolerance, pos);
+                // A merged segment the client can't route locally (a winding passage: its routefinder works in a small
+                // window) doesn't move the player at all: step to the next turn point alone instead, as before.
+                if (result.status === 'stuck' && wi > firstWi) {
+                    wi = firstWi;
+                    wp = path.waypoints[wi]!;
+                    isFinalWp = wi === path.waypoints.length - 1;
+                    wpTolerance = isFinalWp ? Math.min(2, tolerance) : 2;
+                    result = await this.helpers.walkStepToward(wp.x, wp.z, wpTolerance, pos);
+                }
                 pos = result.pos;
                 const deadMidStep = diedEnRoute();
                 if (deadMidStep) return deadMidStep;

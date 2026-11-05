@@ -298,7 +298,7 @@ export function useItemOnNpc(c: LiteClient, itemSlot: number, npcIndex: number, 
     return { success: true, routed };
 }
 
-export function useItemOnLoc(c: LiteClient, itemSlot: number, worldX: number, worldZ: number, locId: number, interfaceId: number = INVENTORY_INTERFACE_ID): ClientActionResult {
+export function useItemOnLoc(c: LiteClient, itemSlot: number, worldX: number, worldZ: number, locId: number, interfaceId: number = INVENTORY_INTERFACE_ID, route = true): ClientActionResult {
     if (!c.isInGame() || !c.localPlayer) {
         return { success: false, reason: 'not_in_game' };
     }
@@ -314,8 +314,8 @@ export function useItemOnLoc(c: LiteClient, itemSlot: number, worldX: number, wo
         return { success: false, reason: 'target_not_found' };
     }
     // Attempt the route, but always dispatch (see interactLoc): aplocu ops
-    // trigger at range and the server owns the reach check.
-    const routed = c.routeToLoc(dest.x, dest.z, locId);
+    // trigger at range and the server owns the reach check. route=false: no MOVE at all.
+    const routed = route ? c.routeToLoc(dest.x, dest.z, locId) : false;
 
     c.writeOpcode(ClientProt.OPLOCU);
     c.out.p2(worldX);

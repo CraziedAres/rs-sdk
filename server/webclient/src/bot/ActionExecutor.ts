@@ -184,7 +184,7 @@ export class ActionExecutor {
 
                 case 'useItemOnLoc': {
                     const result = this.wrapClientAction(
-                        this.client.useItemOnLoc(action.itemSlot, action.x, action.z, action.locId),
+                        this.client.useItemOnLoc(action.itemSlot, action.x, action.z, action.locId, undefined, action.route !== false),
                         `Using item on location`,
                         'Failed to use item on location'
                     );

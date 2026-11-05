@@ -1249,8 +1249,8 @@ export class BotSDK {
     }
 
     /** Use an inventory item on a location. */
-    async sendUseItemOnLoc(itemSlot: number, x: number, z: number, locId: number): Promise<ActionResult> {
-        return this.sendAction({ type: 'useItemOnLoc', itemSlot, x, z, locId, reason: 'SDK' });
+    async sendUseItemOnLoc(itemSlot: number, x: number, z: number, locId: number, route: boolean = true): Promise<ActionResult> {
+        return this.sendAction({ type: 'useItemOnLoc', itemSlot, x, z, locId, reason: 'SDK', ...(route ? {} : { route: false }) });
     }
 
     /** Use an inventory item on an NPC. */

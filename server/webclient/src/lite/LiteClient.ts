@@ -766,8 +766,8 @@ export class LiteClient {
     useItemOnNpc(itemSlot: number, npcIndex: number, interfaceId?: number): ClientActionResult {
         return A.useItemOnNpc(this, itemSlot, npcIndex, interfaceId);
     }
-    useItemOnLoc(itemSlot: number, worldX: number, worldZ: number, locId: number, interfaceId?: number): ClientActionResult {
-        return A.useItemOnLoc(this, itemSlot, worldX, worldZ, locId, interfaceId);
+    useItemOnLoc(itemSlot: number, worldX: number, worldZ: number, locId: number, interfaceId?: number, route = true): ClientActionResult {
+        return A.useItemOnLoc(this, itemSlot, worldX, worldZ, locId, interfaceId, route);
     }
     spellOnNpc(npcIndex: number, spellComponent: number): ClientActionResult {
         return A.spellOnNpc(this, npcIndex, spellComponent);

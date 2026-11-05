@@ -664,7 +664,7 @@ export type BotAction =
     | { type: 'closeModal'; reason: string }
     | { type: 'setCombatStyle'; style: number; reason: string }
     | { type: 'useItemOnItem'; sourceSlot: number; targetSlot: number; reason: string }
-    | { type: 'useItemOnLoc'; itemSlot: number; x: number; z: number; locId: number; reason: string }
+    | { type: 'useItemOnLoc'; itemSlot: number; x: number; z: number; locId: number; reason: string; /** false: no client route (see interactLoc). */ route?: boolean }
     | { type: 'useItemOnNpc'; itemSlot: number; npcIndex: number; reason: string }
     | { type: 'say'; message: string; reason: string }
     | { type: 'privateMessage'; targetName: string; message: string; reason: string }
