@@ -1162,9 +1162,12 @@ export class BotSDK {
         return this.sendAction({ type: 'walkTo', x, z, running, reason: 'SDK' });
     }
 
-    /** Interact with a location (tree, rock, door, etc). */
-    async sendInteractLoc(x: number, z: number, locId: number, option: number = 1): Promise<ActionResult> {
-        return this.sendAction({ type: 'interactLoc', x, z, locId, optionIndex: option, reason: 'SDK' });
+    /**
+     * Interact with a location (tree, rock, door, etc). `route: false` sends the op without a client route: the server
+     * then checks reach from where the player stands (for a loc used from inside its own footprint).
+     */
+    async sendInteractLoc(x: number, z: number, locId: number, option: number = 1, route: boolean = true): Promise<ActionResult> {
+        return this.sendAction({ type: 'interactLoc', x, z, locId, optionIndex: option, reason: 'SDK', ...(route ? {} : { route: false }) });
     }
 
     /** Interact with an NPC by index and option. */

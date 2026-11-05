@@ -2484,7 +2484,7 @@ export class Client extends GameShell {
     /**
      * Interact with a location/object in the world (doors, trees, etc.)
      */
-    interactLoc(worldX: number, worldZ: number, locId: number, optionIndex: number): ClientActionResult {
+    interactLoc(worldX: number, worldZ: number, locId: number, optionIndex: number, route = true): ClientActionResult {
         if (!this.ingame || !this.out || !this.localPlayer) {
             return { success: false, reason: 'not_in_game' };
         }
@@ -2514,7 +2514,7 @@ export class Client extends GameShell {
         // the routefinder can never reach, and the server owns the reach check
         // anyway — worst case it answers "I can't reach that!" instead of us
         // aborting silently.
-        const routed = this.routeToLoc(destSceneX, destSceneZ, locId);
+        const routed = route ? this.routeToLoc(destSceneX, destSceneZ, locId) : false;
 
         const opcodes = [
             ClientProt.OPLOC1,

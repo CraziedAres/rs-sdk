@@ -72,7 +72,7 @@ import type {
     BurstResult,
     ChainStep,
     CastOnItemResult,
-    CraftRunesResult,
+    CraftRunesResult, TeleportResult,
     CrossObstacleResult,
     EnterRuinsResult,
     MakeXOpener,
@@ -319,7 +319,7 @@ export class BotActions {
     async crossObstacle(
         loc: NearbyLoc | string | RegExp,
         option: string | RegExp | number = 1,
-        expect: { to?: { x: number; z: number }; xp?: boolean; timeoutTicks?: number } = {}
+        expect: { to?: { x: number; z: number }; xp?: boolean; timeoutTicks?: number; route?: boolean } = {}
     ): Promise<CrossObstacleResult> {
         return this.processing.crossObstacle(loc, option, expect);
     }
@@ -339,6 +339,15 @@ export class BotActions {
     /** Craft the carried essence into runes at the altar inside the ruins; succeeds on Runecraft XP with essence used. */
     async craftRunes(options: { altar?: NearbyLoc | string | RegExp; essence?: InventoryItem | string | RegExp; timeoutTicks?: number } = {}): Promise<CraftRunesResult> {
         return this.processing.craftRunes(options);
+    }
+
+    /**
+     * Cast a teleport spell (`Spells.CAMELOT_TELEPORT` or its name) and wait until the player lands; a refusal (runes,
+     * level) comes back with the game's message.
+     */
+    async teleport(spell: number | string, options: { timeoutTicks?: number } = {}): Promise<TeleportResult> {
+        await this.dismissBlockingUI();
+        return this.processing.teleport(spell, options);
     }
 
     /** Walk to the physical exchange and open it. Requires updated client/server GE state support. */
@@ -4565,6 +4574,7 @@ export class BotActions {
     async interactLoc(
         target: NearbyLoc | string | RegExp,
         option: number | string | RegExp = 1,
+        options: { route?: boolean } = {},
     ): Promise<InteractLocResult> {
         if (target == null) {
             // An undefined target used to fall through to a match-anything
@@ -4573,7 +4583,7 @@ export class BotActions {
         }
         const resolvedLoc = this.helpers.resolveLocation(target, /./);
         return this.helpers.withDoorRetry(
-            () => this._interactLocOnce(target, option),
+            () => this._interactLocOnce(target, option, options),
             (r) => r.reason === 'cant_reach',
             2,
             resolvedLoc ? { x: resolvedLoc.x, z: resolvedLoc.z } : undefined
@@ -4583,7 +4593,9 @@ export class BotActions {
     private async _interactLocOnce(
         target: NearbyLoc | string | RegExp,
         option: number | string | RegExp = 1,
+        options: { route?: boolean } = {},
     ): Promise<InteractLocResult> {
+        const route = options.route !== false;
         await this.dismissBlockingUI();
 
         // A named option narrows resolution to locs that actually offer it.
@@ -4606,8 +4618,8 @@ export class BotActions {
             opIndex = match.opIndex;
         }
 
-        // Walk to the location first (handles doors)
-        if (loc.distance > 2) {
+        // Walk to the location first (handles doors). route=false: the caller stands where the op must be used.
+        if (route && loc.distance > 2) {
             const walkResult = await this.walkTo(loc.x, loc.z, 2);
             if (!walkResult.success) {
                 return { success: false, message: `Cannot reach ${loc.name}: ${walkResult.message}`, reason: 'cant_reach' };
@@ -4673,7 +4685,7 @@ export class BotActions {
             levelChanged(state) || teleported(state) ||
             (locWasVisible && !state.nearbyLocs.some(sameLoc));
 
-        const result = await this.sdk.sendInteractLoc(locNow.x, locNow.z, locNow.id, opIndex);
+        const result = await this.sdk.sendInteractLoc(locNow.x, locNow.z, locNow.id, opIndex, route);
         if (!result.success) {
             return { success: false, message: result.message, reason: 'timeout' };
         }

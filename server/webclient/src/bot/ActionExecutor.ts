@@ -99,7 +99,7 @@ export class ActionExecutor {
 
                 case 'interactLoc': {
                     const result = this.wrapClientAction(
-                        this.client.interactLoc(action.x, action.z, action.locId, action.optionIndex),
+                        this.client.interactLoc(action.x, action.z, action.locId, action.optionIndex, action.route !== false),
                         `Interacting with loc ${action.locId}`,
                         'Failed to interact with location'
                     );

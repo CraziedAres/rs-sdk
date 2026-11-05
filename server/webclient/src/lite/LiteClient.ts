@@ -723,8 +723,8 @@ export class LiteClient {
     // StateCollector/ActionExecutor see exactly the names Client.ts exposes.
     // ==================================================================
 
-    interactLoc(worldX: number, worldZ: number, locId: number, optionIndex: number): ClientActionResult {
-        return A.interactLoc(this, worldX, worldZ, locId, optionIndex);
+    interactLoc(worldX: number, worldZ: number, locId: number, optionIndex: number, route = true): ClientActionResult {
+        return A.interactLoc(this, worldX, worldZ, locId, optionIndex, route);
     }
     talkToNpc(npcIndex: number): ClientActionResult {
         return A.talkToNpc(this, npcIndex);

@@ -55,7 +55,7 @@ export function normaliseComponentText(raw: string | null | undefined): string {
 
 // ============================================================ interactions
 
-export function interactLoc(c: LiteClient, worldX: number, worldZ: number, locId: number, optionIndex: number): ClientActionResult {
+export function interactLoc(c: LiteClient, worldX: number, worldZ: number, locId: number, optionIndex: number, route = true): ClientActionResult {
     if (!c.isInGame() || !c.localPlayer) {
         return { success: false, reason: 'not_in_game' };
     }
@@ -79,7 +79,9 @@ export function interactLoc(c: LiteClient, worldX: number, worldZ: number, locId
     // tiles the routefinder can never reach, and the server owns the reach
     // check anyway - worst case it answers "I can't reach that!" instead of
     // us aborting silently.
-    const routed = c.routeToLoc(dest.x, dest.z, locId);
+    // route=false: no MOVE packet; the server checks reach from where the player stands (a loc used from inside its
+    // own footprint, such as a long rope swing, whose nearest edge the routefinder would walk to instead).
+    const routed = route ? c.routeToLoc(dest.x, dest.z, locId) : false;
 
     c.writeOpcode([ClientProt.OPLOC1, ClientProt.OPLOC2, ClientProt.OPLOC3, ClientProt.OPLOC4, ClientProt.OPLOC5][optionIndex - 1]);
     c.out.p2(worldX);

@@ -25,9 +25,10 @@
 | `async castOnItem(spell: number \| string, item: InventoryItem \| string \| RegExp, options: { waitOutDelay?: boolean; tries?: number; timeoutTicks?: number } = {}): Promise<CastOnItemResult>` | Cast a spell on an inventory item: High/Low Alchemy, the enchants, Superheat. `spell` is a `Spells` id or a name ('high alchemy', 'HIGH_ALCHEMY', 'enchant lvl3'). Succeeds on the Magic XP. Then, by default, it waits out the spell's delay (High Alchemy lands one per 5 ticks, the others one per 3), so the next call's cast is accepted rather than dropped; a cast that shows no XP within 3 ticks is sent again (up to `tries`). ```ts const r = await bot.castOnItem('high alchemy', /^yew longbow$/i); ``` |
 | `async depositAllExcept(keep: Array<string \| RegExp>): Promise<BankLoadResult>` | With the bank open, deposit every carried item except those matching `keep` (tools, runes), one deposit-all per item kind. ```ts await bot.depositAllExcept([/knife/i, /^nature rune$/i]); ``` |
 | `async withdrawMany(requests: WithdrawRequest[]): Promise<BankLoadResult>` | With the bank open, withdraw several items in one visit. Reports what arrived per item and which requests the bank couldn't fill (`missing`). ```ts await bot.withdrawMany([{ item: /^maple logs$/i, amount: 27 }]); ``` |
-| `async crossObstacle(loc: NearbyLoc \| string \| RegExp, option: string \| RegExp \| number = 1, expect: { to?: { x: number; z: number }; xp?: boolean; timeoutTicks?: number } = {}): Promise<CrossObstacleResult>` | Cross an agility obstacle or shortcut: interact with `option`, then wait until the player stands within a tile of `expect.to` and/or Agility XP lands (`expect.xp`, the default when no tile is given). A failed obstacle (HP lost, not where expected) is `reason: 'failed'`. |
+| `async crossObstacle(loc: NearbyLoc \| string \| RegExp, option: string \| RegExp \| number = 1, expect: { to?: { x: number; z: number }; xp?: boolean; timeoutTicks?: number; route?: boolean } = {}): Promise<CrossObstacleResult>` | Cross an agility obstacle or shortcut: interact with `option`, then wait until the player stands within a tile of `expect.to` and/or Agility XP lands (`expect.xp`, the default when no tile is given). A failed obstacle (HP lost, not where expected) is `reason: 'failed'`. |
 | `async enterRuins(talisman: InventoryItem \| string \| RegExp = /talisman$/i, options: { ruins?: NearbyLoc \| string \| RegExp; timeoutTicks?: number } = {}): Promise<EnterRuinsResult>` | Enter a runecrafting altar: use the talisman on the mysterious ruins (or 'Enter' them when no talisman is carried, e.g. with a tiara worn), then wait for the teleport inside. |
 | `async craftRunes(options: { altar?: NearbyLoc \| string \| RegExp; essence?: InventoryItem \| string \| RegExp; timeoutTicks?: number } = {}): Promise<CraftRunesResult>` | Craft the carried essence into runes at the altar inside the ruins; succeeds on Runecraft XP with essence used. |
+| `async teleport(spell: number \| string, options: { timeoutTicks?: number } = {}): Promise<TeleportResult>` | Cast a teleport spell (`Spells.CAMELOT_TELEPORT` or its name) and wait until the player lands; a refusal (runes, level) comes back with the game's message. |
 
 ### Other
 
@@ -85,7 +86,7 @@
 | Signature | Description |
 |---|---|
 | `async talkTo(target: NearbyNpc \| string \| RegExp): Promise<TalkResult>` | Talk to an NPC and wait for dialog to open. Walks to the NPC first (handling doors). |
-| `async interactLoc(target: NearbyLoc \| string \| RegExp, option: number \| string \| RegExp = 1): Promise<InteractLocResult>` | Interact with a nearby location object (rock, fishing spot, furnace, etc.). Walks to the target first (handling doors), sends the interaction, then waits for an effect produced after the click (an animation starting, a dialog or interface opening, XP or an item gained, the loc changing) or detects failure when the player has been idle for 2 ticks with nothing happening. An animation left over from the previous action does not count. Success can mean the action started, before its product arrives; use mineRock for completed mining. |
+| `async interactLoc(target: NearbyLoc \| string \| RegExp, option: number \| string \| RegExp = 1, options: { route?: boolean } = {}): Promise<InteractLocResult>` | Interact with a nearby location object (rock, fishing spot, furnace, etc.). Walks to the target first (handling doors), sends the interaction, then waits for an effect produced after the click (an animation starting, a dialog or interface opening, XP or an item gained, the loc changing) or detects failure when the player has been idle for 2 ticks with nothing happening. An animation left over from the previous action does not count. Success can mean the action started, before its product arrives; use mineRock for completed mining. |
 | `async interactNpc(target: NearbyNpc \| string \| RegExp, option: number \| string \| RegExp = 1): Promise<InteractNpcResult>` | Interact with a nearby NPC using a specified option (e.g. "Trade", "Pickpocket", "Fish"). Walks to the NPC first (handling doors), sends the interaction, then waits for an effect produced after the click (an animation starting, a dialog or interface opening, XP or an item gained) or detects failure when the player has been idle for 2 ticks with nothing happening. An animation left over from the previous action does not count. |
 | `async pickpocketNpc(target: NearbyNpc \| string \| RegExp): Promise<PickpocketResult>` | Pickpocket an NPC. Handles door retrying if path is blocked. |
 
@@ -284,7 +285,7 @@
 | Signature | Description |
 |---|---|
 | `async sendWalk(x: number, z: number, running: boolean = true): Promise<ActionResult>` | Send walk command to coordinates. |
-| `async sendInteractLoc(x: number, z: number, locId: number, option: number = 1): Promise<ActionResult>` | Interact with a location (tree, rock, door, etc). |
+| `async sendInteractLoc(x: number, z: number, locId: number, option: number = 1, route: boolean = true): Promise<ActionResult>` | Interact with a location (tree, rock, door, etc). `route: false` sends the op without a client route: the server then checks reach from where the player stands (for a loc used from inside its own footprint). |
 | `async sendInteractNpc(npcIndex: number, option: number = 1): Promise<ActionResult>` | Interact with an NPC by index and option. |
 | `async sendInteractPlayer(playerIndex: number, option: number = 2): Promise<ActionResult>` | Interact with a player by index and option (1-5). Option 2 = Attack (wilderness), 3 = Follow, 4 = Trade. |
 | `async sendTalkToNpc(npcIndex: number): Promise<ActionResult>` | Talk to an NPC by index. |
@@ -1089,6 +1090,20 @@ interface EnterRuinsResult {
   message: string;
   position?: { x: number; z: number };
   reason?: 'no_talisman' | 'cant_reach' | 'no_effect' | 'timeout';
+}
+```
+
+### TeleportResult
+
+```typescript
+interface TeleportResult {
+  success: boolean;
+  message: string;
+  /** Where the player landed. */
+  position?: { x: number; z: number; level: number };
+  /** Magic XP the cast gave. */
+  xpGained?: number;
+  reason?: 'unknown_spell' | 'no_runes' | 'level_too_low' | 'refused' | 'modal_open' | 'timeout';
 }
 ```
 

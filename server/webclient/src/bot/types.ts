@@ -507,7 +507,7 @@ export type BotAction =
     | { type: 'dropItem'; slot: number; reason: string }
     | { type: 'pickupItem'; x: number; z: number; itemId: number; reason: string }
     | { type: 'interactGroundItem'; x: number; z: number; itemId: number; optionIndex: number; reason: string }
-    | { type: 'interactLoc'; x: number; z: number; locId: number; optionIndex: number; reason: string }
+    | { type: 'interactLoc'; x: number; z: number; locId: number; optionIndex: number; reason: string; /** false: send the op with no client route (the server checks reach from where the player stands). */ route?: boolean }
     | { type: 'useItemOnItem'; sourceSlot: number; targetSlot: number; reason: string }
     | { type: 'useItemOnLoc'; itemSlot: number; x: number; z: number; locId: number; reason: string }
     | { type: 'useItemOnNpc'; itemSlot: number; npcIndex: number; reason: string }

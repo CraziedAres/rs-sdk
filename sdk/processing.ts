@@ -33,8 +33,7 @@ import type {
     MakeXOpener,
     MakeXResult,
     PacedResult,
-    WithdrawRequest,
-} from './types';
+    WithdrawRequest, TeleportResult } from './types';
 import { exactNamePattern, resolveSkillDialogProduct, skillDialogProductLabels } from './action-quantity';
 import { Spells, type SpellName } from './spells';
 import { ticksToMs } from './tick-clock';
@@ -866,12 +865,12 @@ export class ProcessingActions {
 
     // ---------- S7: obstacles ----------
 
-    async crossObstacle(loc: NearbyLoc | string | RegExp, option: string | RegExp | number = 1, expect: { to?: { x: number; z: number }; xp?: boolean; timeoutTicks?: number } = {}): Promise<CrossObstacleResult> {
+    async crossObstacle(loc: NearbyLoc | string | RegExp, option: string | RegExp | number = 1, expect: { to?: { x: number; z: number }; xp?: boolean; timeoutTicks?: number; route?: boolean } = {}): Promise<CrossObstacleResult> {
         const start = this.state();
         if (!start?.player) return { success: false, message: 'No game state', xpGained: 0, reason: 'timeout' };
         const agility0 = skillXp(start, 'Agility');
         const hp0 = start.skills.find(s => s.name === 'Hitpoints')?.level ?? 0;
-        const r = await this.bot.interactLoc(loc, option);
+        const r = await this.bot.interactLoc(loc, option, expect.route === false ? { route: false } : {});
         if (!r.success) return { success: false, message: r.message, xpGained: 0, reason: r.reason === 'cant_reach' ? 'cant_reach' : 'loc_not_found' };
         const arrived = (s: BotWorldState) => !expect.to || (s.player != null && Math.abs(s.player.worldX - expect.to.x) <= 1 && Math.abs(s.player.worldZ - expect.to.z) <= 1);
         const gotXp = (s: BotWorldState) => skillXp(s, 'Agility') > agility0;
@@ -905,6 +904,40 @@ export class ProcessingActions {
         } catch {
             return { success: false, message: 'Did not arrive inside the ruins', reason: 'timeout' };
         }
+    }
+
+    // ---------- teleports ----------
+
+    /**
+     * Casts a teleport spell (its magic-tab button) and waits for the effect: the player lands more than 20 tiles away.
+     * A refusal (runes, level, a place that blocks teleports) comes back with its game message.
+     */
+    async teleport(spell: number | string, options: { timeoutTicks?: number } = {}): Promise<TeleportResult> {
+        const resolved = resolveSpell(spell);
+        if (!resolved) return { success: false, message: `Unknown spell: ${spell}`, reason: 'unknown_spell' };
+        const start = this.state();
+        if (!start?.player) return { success: false, message: 'No game state', reason: 'timeout' };
+        if (start.bank?.isOpen || start.shop?.isOpen) return { success: false, message: 'Close the bank or shop first', reason: 'modal_open' };
+        const from = { x: start.player.worldX, z: start.player.worldZ };
+        const magic0 = skillXp(start, 'Magic');
+        const msgFrom = start.gameMessages.length ? Math.max(...start.gameMessages.map(m => m.tick ?? 0)) : 0;
+        const sent = await this.sdk.sendClickComponent(resolved.id);
+        if (!sent.success) return { success: false, message: sent.message, reason: 'timeout' };
+        let tick = start.tick;
+        for (let k = 0; k < (options.timeoutTicks ?? 12); k++) {
+            const s = await this.frameAfter(tick);
+            if (!s?.player) break;
+            tick = s.tick;
+            if (Math.max(Math.abs(s.player.worldX - from.x), Math.abs(s.player.worldZ - from.z)) > 20) {
+                return { success: true, message: `Teleported to (${s.player.worldX}, ${s.player.worldZ})`, position: { x: s.player.worldX, z: s.player.worldZ, level: s.player.level }, xpGained: skillXp(s, 'Magic') - magic0 };
+            }
+            const refusal = s.gameMessages.find(m => (m.tick ?? 0) > msgFrom && /do not have enough|don't have enough|need a magic level|level to cast|can't|cannot|teleport block/i.test(m.text));
+            if (refusal) {
+                const text = refusal.text.toLowerCase();
+                return { success: false, message: refusal.text, reason: text.includes('enough') ? 'no_runes' : text.includes('level') ? 'level_too_low' : 'refused' };
+            }
+        }
+        return { success: false, message: 'The teleport did not happen', reason: 'timeout' };
     }
 
     async craftRunes(options: { altar?: NearbyLoc | string | RegExp; essence?: ItemTarget; timeoutTicks?: number } = {}): Promise<CraftRunesResult> {
