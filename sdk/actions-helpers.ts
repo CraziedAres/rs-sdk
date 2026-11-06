@@ -183,6 +183,38 @@ export class ActionHelpers {
     }
 
     /**
+     * Cut a slashable web in the way (web.rs2 bigweb_slashable: a knife used on it, or its Slash op with a slash weapon
+     * equipped; half the tries work; it grows back after 100 ticks) and mark it open in this session's path queries:
+     * the bundled collision map keeps a cut web solid, so without that no path ever goes through it.
+     * Only a web within `maxDistance` of the player counts. Raw sends (as tryOpenBlockingDoor): the client routes the op
+     * on its own live collision. Effect-checked: done when the loc on that tile no longer offers Slash.
+     * @returns true when a web was cut (or found already cut) and marked open
+     */
+    async tryCutBlockingWeb(maxDistance: number = 3, attempts: number = 8): Promise<boolean> {
+        const isSlash = (o: { text: string }) => /^slash$/i.test(o.text);
+        const web = this.sdk.getNearbyLocs()
+            .filter(l => l.distance <= maxDistance && l.optionsWithIndex.some(isSlash))
+            .sort((a, b) => a.distance - b.distance)[0];
+        if (!web) return false;
+        const level = this.sdk.getState()?.player?.level ?? 0;
+        const slashOp = web.optionsWithIndex.find(isSlash)!;
+        const cursor = this.getMessageTick();
+        for (let attempt = 0; attempt < attempts; attempt++) {
+            const knife = this.sdk.getState()?.inventory.find(i => /^knife$/i.test(i.name));
+            if (knife) await this.sdk.sendUseItemOnLoc(knife.slot, web.x, web.z, web.id);
+            else await this.sdk.sendInteractLoc(web.x, web.z, web.id, slashOp.opIndex);
+            await this.sdk.waitForTicks(3);
+            const now = this.sdk.getNearbyLocs().find(l => l.x === web.x && l.z === web.z && l.optionsWithIndex.some(isSlash));
+            if (!now) {
+                this.sdk.openLocTemporarily(level, web.x, web.z, 30_000);
+                return true;
+            }
+            if (this.findRefusal(cursor, ['only a sharp blade'])) return false;
+        }
+        return false;
+    }
+
+    /**
      * Get the public tick of the most recent game message. Use this before an
      * action to establish a baseline for checkCantReachMessage.
      */

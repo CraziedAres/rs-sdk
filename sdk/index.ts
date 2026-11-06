@@ -197,6 +197,7 @@ export class BotSDK {
     private connectPromise: Promise<void> | null = null;
     private sdkClientId: string;
     private temporaryDoorBlocks = new pathfinding.TemporaryDoorBlocklist();
+    private temporaryOpenLocs = new pathfinding.TemporaryOpenLocs();
 
     /** True once the gateway has accepted our credentials (sdk_connected received). */
     private authenticated = false;
@@ -1799,7 +1800,8 @@ export class BotSDK {
             destX,
             destZ,
             maxWaypoints,
-            this.temporaryDoorBlocks.active()
+            this.temporaryDoorBlocks.active(),
+            this.temporaryOpenLocs.active()
         );
 
         // If no waypoints and destination zone isn't allocated, that's expected -
@@ -1837,6 +1839,19 @@ export class BotSDK {
         if (!door) return false;
         this.temporaryDoorBlocks.block(door, ttlMs);
         return true;
+    }
+
+    /**
+     * Mark a blocking scenery loc (a cut web) open in this SDK instance's path queries until it expires: the bundled
+     * collision map keeps it solid. Like blockDoorTemporarily, the shared map is only changed for each synchronous query.
+     */
+    openLocTemporarily(level: number, x: number, z: number, ttlMs: number = 30_000, width: number = 1, length: number = 1): void {
+        this.temporaryOpenLocs.open({ level, x, z, width, length }, ttlMs);
+    }
+
+    /** Check this SDK session's non-expired open-loc evidence. */
+    isLocTemporarilyOpen(level: number, x: number, z: number): boolean {
+        return this.temporaryOpenLocs.has(level, x, z);
     }
 
     /** Check this SDK session's non-expired temporary door evidence. */
