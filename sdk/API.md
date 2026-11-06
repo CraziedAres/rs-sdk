@@ -231,6 +231,7 @@
 | `getPrayerState(): PrayerState \| null` | Get current prayer state from world state. |
 | `isPrayerActive(prayer: PrayerName \| number): boolean` | Check if a specific prayer is currently active. |
 | `getActivePrayers(): PrayerName[]` | Get list of all currently active prayer names. |
+| `isLocTemporarilyOpen(level: number, x: number, z: number): boolean` | Check this SDK session's non-expired open-loc evidence. |
 | `isDoorTemporarilyBlocked(level: number, x: number, z: number): boolean` | Check this SDK session's non-expired temporary door evidence. |
 
 ### Other
@@ -245,6 +246,7 @@
 | `async clickInterfaceOption(selector: InterfaceOptionSelector): Promise<ActionResult>` | Click exactly one interface option, selected by its state object or by visible text (substring for strings, match for regexes). This dispatches the option's `componentId` and never interprets `InterfaceOption.index` as an array position. |
 | `async dm(targetName: string, text: string, opts: { maxLen?: number; delayTicks?: number } = {}): Promise<ActionResult[]>` | Send a private message of any length, auto-split into chunks like {@link say}. Returns one ActionResult per chunk. |
 | `blockDoorTemporarily(level: number, x: number, z: number, ttlMs: number = 30_000): boolean` | Temporarily exclude a known door from this SDK instance's path queries. The shared collision map is never mutated beyond the synchronous query. |
+| `openLocTemporarily(level: number, x: number, z: number, ttlMs: number = 30_000, width: number = 1, length: number = 1): void` | Mark a blocking scenery loc (a cut web) open in this SDK instance's path queries until it expires: the bundled collision map keeps it solid. Like blockDoorTemporarily, the shared map is only changed for each synchronous query. |
 
 ### Condition Waiting
 

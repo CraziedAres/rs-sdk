@@ -61,6 +61,47 @@ export class TemporaryDoorBlocklist {
     }
 }
 
+/** A blocking scenery loc (a cut web) the bundled collision map still shows as a wall. */
+export interface OpenLocInfo {
+    level: number;
+    x: number;
+    z: number;
+    width: number;
+    length: number;
+}
+
+/**
+ * Session-owned evidence that a blocking loc is open for now: a slashed web stays in the bundled (static) collision
+ * map as a solid loc, so a path through it is never found even after it is cut. While an entry lives, findLongPath
+ * lifts that loc's collision for the length of the query. Entries expire: a cut web grows back (web.rs2: 100 ticks).
+ */
+export class TemporaryOpenLocs {
+    private entries = new Map<string, { loc: OpenLocInfo; expiresAt: number }>();
+
+    constructor(private readonly now: () => number = Date.now) {}
+
+    open(loc: OpenLocInfo, ttlMs: number = 30_000): void {
+        this.entries.set(doorKey(loc.level, loc.x, loc.z), { loc, expiresAt: this.now() + Math.max(0, ttlMs) });
+    }
+
+    active(): OpenLocInfo[] {
+        const now = this.now();
+        for (const [key, entry] of this.entries) {
+            if (entry.expiresAt <= now) this.entries.delete(key);
+        }
+        return [...this.entries.values()].map(entry => entry.loc);
+    }
+
+    has(level: number, x: number, z: number): boolean {
+        this.active();
+        return this.entries.has(doorKey(level, x, z));
+    }
+
+    clear(): void {
+        this.entries.clear();
+    }
+}
+
 // Spatial index of all known door positions, keyed by "level,x,z"
 const doorIndex = new Map<string, DoorInfo>();
 
@@ -160,7 +201,8 @@ export function findLongPath(
     destX: number,
     destZ: number,
     maxWaypoints: number = 500,
-    blockedDoors: Iterable<DoorInfo> = []
+    blockedDoors: Iterable<DoorInfo> = [],
+    openLocs: Iterable<OpenLocInfo> = []
 ): Array<{ x: number; z: number; level: number }> {
     if (!initialized) {
         initPathfinding();
@@ -170,7 +212,13 @@ export function findLongPath(
     // this synchronous query. The shared collision snapshot is restored before
     // another bot can pathfind.
     const applied: DoorInfo[] = [];
+    const lifted: OpenLocInfo[] = [];
     try {
+        // This session's cut webs: their walk collision lifted for this query only (restored below).
+        for (const loc of openLocs) {
+            rsmod.changeLoc(loc.x, loc.z, loc.level, loc.width, loc.length, false, false, false);
+            lifted.push(loc);
+        }
         for (const door of blockedDoors) {
             rsmod.changeWall(
                 door.x, door.z, door.level,
@@ -193,6 +241,9 @@ export function findLongPath(
                 door.angle, door.shape, door.blockrange,
                 false, false
             );
+        }
+        for (const loc of lifted) {
+            rsmod.changeLoc(loc.x, loc.z, loc.level, loc.width, loc.length, false, false, true);
         }
     }
 }

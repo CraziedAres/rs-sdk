@@ -1438,6 +1438,9 @@ export class BotActions {
 
         const MAX_ITERATIONS = 50;
         const MAX_DOOR_RETRIES = 3;
+        // Webs cut on this walk (each a different web: a cut one stays open for this session's queries).
+        const MAX_WEB_CUTS = 3;
+        let webCuts = 0;
         let doorRetryCount = 0;
         let poorProgressCount = 0;
         const doorFailCounts = new Map<string, number>(); // Tracks reach failures per door
@@ -1452,6 +1455,12 @@ export class BotActions {
         // Try to open a blocking door. Returns true if door was opened.
         const tryOpenDoor = async (): Promise<boolean> => {
             if (!openDoors || doorRetryCount >= MAX_DOOR_RETRIES) return false;
+            // A slashable web beside the stall point (a knife or a slash weapon cuts it): cut, then re-path through it.
+            if (await this.helpers.tryCutBlockingWeb()) {
+                doorRetryCount++;
+                console.log('[walkTo] Cut a web in the way — re-routing through it');
+                return true;
+            }
             if (await this.helpers.tryOpenBlockingDoor()) {
                 doorRetryCount++;
                 await this.sdk.waitForTicks(1);
@@ -1490,6 +1499,12 @@ export class BotActions {
                 await this.sdk.waitForTicks(1);
                 path = await this.sdk.sendFindPath(x, z, 500);
                 if (!path.success || !path.waypoints?.length) {
+                    // Standing at a slashable web (the bundled map keeps it solid): cut it and re-query through it.
+                    if (openDoors && webCuts < MAX_WEB_CUTS && await this.helpers.tryCutBlockingWeb()) {
+                        webCuts++;
+                        console.log('[walkTo] Cut a web in the way — re-routing through it');
+                        continue;
+                    }
                     // "no waypoints" reads as broken collision data, but the usual
                     // cause is a destination that is simply blocked — a wall, or a
                     // tile a loc stands on. Say which, so callers pick a neighbour
