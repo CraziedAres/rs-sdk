@@ -85,9 +85,11 @@ const { LiteClient } = await import('../lite/LiteClient.js');
 const { dispatch } = await import('../lite/protocol/incoming.js');
 const { captureBaseInterfaces, resetBaseInterfaces } = await import('../lite/interfaces.js');
 const { BotSDK } = await import('../../../../sdk/index.js');
+const { clickComponent: clickComponentLite, getInterfaceOptions: getInterfaceOptionsLite } = await import('../lite/actions.js');
 
 const BUTTON_OK = 1;
 const BUTTON_CLOSE = 3;
+const BUTTON_CONTINUE = 6;
 
 /** Install a component in the shared IfType registry the client reads from. */
 function defineComponent(id: number, com: Record<string, unknown>): void {
@@ -533,6 +535,85 @@ describe('clickComponent', () => {
         expect(payload).toEqual([3903]);
     });
 });
+
+// A pause button on a main-screen interface (a script's p_pausebutton under if_openmain, e.g. a minigame's
+// "Continue..." between rounds) must be answered with RESUME_PAUSEBUTTON: the engine has no if_button trigger for it.
+for (const kind of ['browser', 'lite'] as const) {
+    describe(`${kind} main-screen pause buttons`, () => {
+        function fixture(hidden = false) {
+            defineComponent(9300, { type: 0, children: [9301, 9302], width: 100, height: 100 });
+            defineComponent(9301, { buttonType: BUTTON_OK, buttonText: 'Ok', text: 'Roll', width: 10, height: 10 });
+            defineComponent(9302, { buttonType: BUTTON_CONTINUE, buttonText: 'Continue...', text: 'Continue...', width: 10, height: 10, hide: hidden });
+            const out = new Packet(new Uint8Array(64));
+            let client: any;
+            if (kind === 'lite') {
+                resetBaseInterfaces();
+                captureBaseInterfaces();
+                client = new LiteClient({ connection: { out, isClosed: false } as never, locIndex: {} as never, username: 'pause-test', password: 'x' });
+                client.ingame = true;
+                (client as any).isInGame = () => true;
+            } else {
+                client = Object.assign(Object.create(Client.prototype), {
+                    out, ingame: true, chatModalId: -1, sideModalId: -1, mainModalId: -1, resumedPauseButton: false, marketSearchInput: false,
+                    writePacketOpcode(opcode: number) { out.p1(opcode); },
+                    closeModal() { throw new Error('should not close the modal'); },
+                });
+            }
+            const open = () => {
+                if (kind === 'lite') {
+                    const body = new Packet(new Uint8Array(8));
+                    body.p2(9300);
+                    body.pos = 0;
+                    dispatch(client, ServerProt.IF_OPENMAIN, body, 2);
+                } else {
+                    client.mainModalId = 9300;
+                    client.resumedPauseButton = false;
+                }
+            };
+            const click = (id: number) => (kind === 'lite' ? clickComponentLite(client, id) : Client.prototype.clickComponent.call(client, id));
+            const options = () => (kind === 'lite' ? getInterfaceOptionsLite(client) : Client.prototype.getInterfaceOptions.call(client));
+            const sent = () => Array.from(out.data.subarray(0, out.pos));
+            return { client, out, open, click, options, sent };
+        }
+
+        test('the pause button is published as an interface option', () => {
+            const f = fixture();
+            f.open();
+            expect(f.options().map((o: { text: string; componentId: number }) => [o.text, o.componentId])).toEqual([['Roll', 9301], ['Continue...', 9302]]);
+        });
+
+        test('a hidden pause button is not published', () => {
+            // Lite clients copy the interface tables when they're made: the hidden button is defined first.
+            const f = fixture(true);
+            f.open();
+            expect(f.options().map((o: { componentId: number }) => o.componentId)).toEqual([9301]);
+        });
+
+        test('clicking it sends RESUME_PAUSEBUTTON, not IF_BUTTON', () => {
+            const f = fixture();
+            f.open();
+            expect(f.click(9302)).toBe(true);
+            expect(f.sent()).toEqual([ClientProt.RESUME_PAUSEBUTTON, 9302 >> 8, 9302 & 255]);
+        });
+
+        test('one resume per pause: a second click is refused until the next interface packet', () => {
+            const f = fixture();
+            f.open();
+            expect(f.click(9302)).toBe(true);
+            expect(f.click(9302)).toBe(false);
+            f.open();
+            expect(f.click(9302)).toBe(true);
+            expect(f.sent().filter(b => b === ClientProt.RESUME_PAUSEBUTTON).length).toBe(2);
+        });
+
+        test('ordinary buttons on the same screen still send IF_BUTTON', () => {
+            const f = fixture();
+            f.open();
+            expect(f.click(9301)).toBe(true);
+            expect(f.sent()).toEqual([ClientProt.IF_BUTTON, 9301 >> 8, 9301 & 255]);
+        });
+    });
+}
 
 describe('getDialogOptions', () => {
     test('flattens the layout newlines skill dialogs pad product labels with', () => {

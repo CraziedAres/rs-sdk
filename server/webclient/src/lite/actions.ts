@@ -402,6 +402,16 @@ export function clickComponent(c: LiteClient, componentId: number): boolean {
         c.out.p2(selected.item);
         return true;
     }
+    // A pause button on the main screen: the engine resumes the paused script on RESUME_PAUSEBUTTON and has no
+    // if_button trigger for it ("No trigger for [if_button,...]"). Latched like a dialog continue: one resume per
+    // pause, until the next interface packet clears it.
+    if (c.mainModalId !== -1 && IfType.list[componentId]?.buttonType === ButtonType.BUTTON_CONTINUE) {
+        if (c.resumedPauseButton) return false;
+        c.writeOpcode(ClientProt.RESUME_PAUSEBUTTON);
+        c.out.p2(componentId);
+        c.resumedPauseButton = true;
+        return true;
+    }
     c.writeOpcode(ClientProt.IF_BUTTON);
     c.out.p2(componentId);
     return true;
@@ -591,7 +601,10 @@ export function getInterfaceOptions(c: LiteClient): Array<{ index: number; text:
         const com = IfType.list[comId];
         if (!com || (com.type === 0 && com.hide)) return;
 
-        const clickable = com.buttonType === ButtonType.BUTTON_OK || com.buttonType === ButtonType.BUTTON_TARGET || com.buttonType === ButtonType.BUTTON_SELECT;
+        // A main-screen pause button ("Continue..." under a p_pausebutton) is published too, once it is shown;
+        // clickComponent answers it with RESUME_PAUSEBUTTON.
+        const clickable = com.buttonType === ButtonType.BUTTON_OK || com.buttonType === ButtonType.BUTTON_TARGET || com.buttonType === ButtonType.BUTTON_SELECT
+            || (com.buttonType === ButtonType.BUTTON_CONTINUE && !com.hide);
         if (clickable && !(com.width <= 0 || com.height <= 0) && (com.buttonText || com.text)) {
             const text = normaliseComponentText(com.text) || normaliseComponentText(com.buttonText);
             if (text) {
