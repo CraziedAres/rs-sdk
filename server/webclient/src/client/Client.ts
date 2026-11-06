@@ -2829,9 +2829,12 @@ export class Client extends GameShell {
 
             if (com.type === 0 && com.hide) return;
 
+            // A main-screen pause button ("Continue..." under a p_pausebutton) is published once shown;
+            // clickComponent answers it with RESUME_PAUSEBUTTON.
             const isClickable = com.buttonType === ButtonType.BUTTON_OK ||
                                com.buttonType === ButtonType.BUTTON_TARGET ||
-                               com.buttonType === ButtonType.BUTTON_SELECT;
+                               com.buttonType === ButtonType.BUTTON_SELECT ||
+                               (com.buttonType === ButtonType.BUTTON_CONTINUE && !com.hide);
 
             if (isClickable && !(com.width <= 0 || com.height <= 0) && (com.buttonText || com.text)) {
                 options.push({
@@ -2889,6 +2892,16 @@ export class Client extends GameShell {
         const com = IfType.list[componentId];
         if (com && com.buttonType === ButtonType.BUTTON_CLOSE) {
             this.closeModal();
+            return true;
+        }
+
+        // A pause button on the main screen resumes the paused script (RESUME_PAUSEBUTTON, as a real click does);
+        // the engine has no if_button trigger for it. One resume per pause, like a dialog continue.
+        if (com && com.buttonType === ButtonType.BUTTON_CONTINUE && this.mainModalId !== -1) {
+            if (this.resumedPauseButton) return false;
+            this.writePacketOpcode(ClientProt.RESUME_PAUSEBUTTON);
+            this.out.p2(componentId);
+            this.resumedPauseButton = true;
             return true;
         }
 
