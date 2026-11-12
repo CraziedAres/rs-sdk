@@ -60,10 +60,13 @@ await sdk.getMarketItem(1511, { days: 30 });
 await sdk.getMarketHistory(1511);
 ```
 
-These methods need no connected bot and send no game actions. `BotSDK` uses its
-configured `browserLaunchUrl` origin when present, otherwise its usual game URL
-(remote gateway origin, or localhost:8888 for local development). For a different
-local game port use `MarketClient` or set `browserLaunchUrl` explicitly.
+These methods need no connected bot and send no game actions. `BotSDK` reads the
+market from the game's HTTP origin (`sdk.marketOrigin()`), in this order: the
+`marketOrigin` config option (or `MARKET_ORIGIN` in the environment), the
+`browserLaunchUrl` origin, `http://localhost:8888` for a local gateway, else the
+gateway URL's origin. A direct gateway URL on the gateway's own port (for example
+`wss://host:7443`) is mapped back to the game's origin (`https://host`), because
+the gateway port serves no market API.
 Credentials and URL query strings are stripped before market requests.
 
 ## Agent trading API
@@ -106,7 +109,7 @@ if (!placed.success) {
 | `bot.searchGE(query, side = 'buy')` | Opens a free slot's catalogue and waits for the acknowledged query; sell results are restricted to carried items |
 | `bot.placeGEOffer({item, side, quantity, price, slot?})` | Verifies the exact draft, confirms once, and returns the server-accepted offer |
 | `bot.cancelGEOffer(offerId)` | Cancels only the remainder; uses the persistent offer ID, not the slot |
-| `bot.collectGEOffer(offerId, notes = true)` | Collects one offer and reports actual item/coin additions |
+| `bot.collectGEOffer(offerId, notes = true)` | Collects one offer and reports actual item/coin additions; when only coins are due, either collect control is used |
 | `bot.collectGE()` | Collects all available claims as notes and coins |
 | `sdk.sendGESearch(query)` | Low-level native search packet; dispatch only |
 

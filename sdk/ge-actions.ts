@@ -120,6 +120,18 @@ export class GEActions {
         if (!offer) throw new GEFailure('That offer is no longer in your occupied slots.', 'offer_not_found');
         await this.click(`view${offer.slot}`, (s) => s.screen === 'offer' && s.selectedOffer === offerId, deadline);
     }
+    /**
+     * The control that collects one selected offer. Notes or not only changes the form of the items: when only coins
+     * are due, either control collects them, so a screen that offers just one of the two still collects.
+     */
+    private collectControl(offerId: number, notes: boolean): 'collect' | 'collectNotes' {
+        const preferred = notes ? 'collectNotes' : 'collect';
+        const s = this.state();
+        const itemsDue = (s.offers.find((o) => o.id === offerId)?.items ?? 0) > 0;
+        if (itemsDue || s.controls[preferred] !== undefined) return preferred;
+        const other = notes ? 'collect' : 'collectNotes';
+        return s.controls[other] !== undefined ? other : preferred;
+    }
     private validNumber(n: number) {
         return Number.isSafeInteger(n) && n > 0 && n <= MAX_GP;
     }
@@ -317,7 +329,7 @@ export class GEActions {
                 await this.select(offerId, deadline);
             }
             const state = await this.click(
-                offerId === undefined ? 'collectAll' : notes ? 'collectNotes' : 'collect',
+                offerId === undefined ? 'collectAll' : this.collectControl(offerId, notes),
                 (s) => s.receipt?.kind === 'collect' && s.receipt.offerId === offerId,
                 deadline,
             );

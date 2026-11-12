@@ -112,6 +112,27 @@ export function preferDirectGateway(url: string, directGateways: Record<string, 
     return check;
 }
 
+/**
+ * The game's HTTP origin for the public market API, from the SDK's config. The market lives on the game's web
+ * server, never on a gateway port:
+ * - an explicit origin (config.marketOrigin, or MARKET_ORIGIN in the environment) wins;
+ * - then the browser launch URL's origin;
+ * - a local gateway means the local game on port 8888;
+ * - a direct gateway URL (its own TLS port, DIRECT_GATEWAYS) maps back to the relayed URL, whose origin is the game's;
+ * - any other remote gateway on its own port (no /gateway relay path) is not the web server: the default port is.
+ */
+export function deriveMarketOrigin(gatewayUrl: string, browserLaunchUrl = '', explicit = '', directGateways: Record<string, string> = DIRECT_GATEWAYS): string {
+    const override = explicit || (typeof process !== 'undefined' ? process.env?.MARKET_ORIGIN ?? '' : '');
+    if (override) return new URL(override).origin;
+    if (browserLaunchUrl) return new URL(browserLaunchUrl).origin;
+    if (!gatewayUrl || gatewayUrl.includes('localhost') || gatewayUrl.includes('127.0.0.1')) return 'http://localhost:8888';
+    const trimmed = gatewayUrl.replace(/\/+$/, '');
+    const relayed = Object.entries(directGateways).find(([, direct]) => direct.replace(/\/+$/, '') === trimmed)?.[0];
+    const url = new URL((relayed ?? trimmed).replace(/^ws:/, 'http:').replace(/^wss:/, 'https:'));
+    if (!relayed && url.port && !/\/gateway$/.test(url.pathname)) url.port = '';
+    return url.origin;
+}
+
 /** Drop a cached direct-gateway check so the next connect probes again. */
 export function forgetDirectGateway(url: string, directGateways: Record<string, string> = DIRECT_GATEWAYS): void {
     const direct = directGateways[url];
@@ -219,6 +240,7 @@ export class BotSDK {
             autoLaunchBrowser: config.autoLaunchBrowser ?? 'auto',
             freshDataThreshold: config.freshDataThreshold ?? 3000,
             browserLaunchUrl: config.browserLaunchUrl || '',
+            marketOrigin: config.marketOrigin || '',
             browserLaunchTimeout: config.browserLaunchTimeout || 30000,
             readyTimeout: config.readyTimeout ?? 15000,
             connectTimeout: config.connectTimeout ?? 30000,
@@ -642,22 +664,28 @@ export class BotSDK {
 
     /** Check whether this server enables GE. No connected bot or physical access needed. */
     getGEAvailability(): Promise<GEAvailability> {
-        return new MarketClient(this.buildClientUrl()).status();
+        return new MarketClient(this.marketOrigin()).status();
     }
 
     /** Read public Grand Exchange prices. Uses the game origin; no login or physical access needed. */
     getMarketItems(query = '', options: MarketItemsOptions = {}): Promise<MarketItems> {
-        return new MarketClient(this.buildClientUrl()).items(query, options);
+        return new MarketClient(this.marketOrigin()).items(query, options);
     }
 
     /** Read current offers, latest trade and selected-period volume for a canonical item ID. */
     getMarketItem(itemId: number, options: MarketItemOptions = {}): Promise<MarketQuote> {
-        return new MarketClient(this.buildClientUrl()).item(itemId, options);
+        return new MarketClient(this.marketOrigin()).item(itemId, options);
     }
 
     /** Read historical trade prices and volumes in hour/day UTC buckets (milliseconds). */
     getMarketHistory(itemId: number, options: MarketHistoryOptions = {}): Promise<MarketHistory> {
-        return new MarketClient(this.buildClientUrl()).history(itemId, options);
+        return new MarketClient(this.marketOrigin()).history(itemId, options);
+    }
+
+    /** The game's HTTP origin the market reads use (deriveMarketOrigin). Never a gateway port. */
+    marketOrigin(): string {
+        const gatewayUrl = this.config.gatewayUrl || `ws://${this.config.host}:${this.config.port}`;
+        return deriveMarketOrigin(gatewayUrl, this.config.browserLaunchUrl, this.config.marketOrigin);
     }
 
     /** Private GE state while at an open physical exchange. Null when closed or unsupported. */

@@ -735,6 +735,11 @@ export interface SDKConfig {
     freshDataThreshold?: number;
     /** Override client URL for auto-launch (derived from gatewayUrl if not set) */
     browserLaunchUrl?: string;
+    /**
+     * The game's HTTP origin for public market reads (e.g. https://server.com). Derived when not set: see
+     * deriveMarketOrigin. Needed only when the game's web server is not where the gateway URL suggests.
+     */
+    marketOrigin?: string;
     /** Timeout waiting for bot to connect after browser launch (default: 30000ms) */
     browserLaunchTimeout?: number;
     /**
