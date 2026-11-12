@@ -241,6 +241,7 @@
 | `onClientDetached(listener: () => void): () => void` | Called when the gateway reports the bot's game client gone. Returns an unsubscribe function. |
 | `async checkBotStatus(): Promise<BotStatus>` | Check bot status via gateway HTTP endpoint. Returns info about whether bot is connected and who else is controlling/observing. |
 | `async launchBrowser(): Promise<void>` | Launch native browser to client URL. Uses the `open` package for cross-platform support (macOS, Windows, Linux, WSL). Falls back to printing the URL if no browser can be opened. |
+| `marketOrigin(): string` | The game's HTTP origin the market reads use (deriveMarketOrigin). Never a gateway port. |
 | `ticksToMs(ticks: number): number` | Wall-clock ms for `ticks` game ticks at the measured tick rate, never less than at 100 ms/tick. BotActions sizes its default timeouts with this, so a 300 ms server gets the same number of ticks as a 100 ms one. |
 | `countInventoryItems(pattern: string \| RegExp): number` | Count total item quantity matching a name pattern. This sums stack sizes across every matching slot. Use `getInventory().filter(...)` when the number of occupied slots is needed. |
 | `async clickInterfaceOption(selector: InterfaceOptionSelector): Promise<ActionResult>` | Click exactly one interface option, selected by its state object or by visible text (substring for strings, match for regexes). This dispatches the option's `componentId` and never interprets `InterfaceOption.index` as an array position. |

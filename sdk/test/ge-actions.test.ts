@@ -251,3 +251,40 @@ test('reopening is best effort and never masks the caller own failure', async ()
     expect(result.reason).toBe('no_interface');
     expect(sent).toEqual([]);
 });
+
+/** Collect one offer through its slot view: home, view<slot>, then the collect control the screen offers. */
+function offerScreen(controls: Record<string, number>, offer: Partial<import('../ge-types').GEOffer>) {
+    const full = { id: 7, slot: 2, item: 1511, name: 'Logs', side: 'sell', quantity: 3, price: 50, remaining: 0, filled: 3, state: 'completed', items: 0, coins: 143, gross: 150, tax: 7, ...offer } as import('../ge-types').GEOffer;
+    const { sdk, world, bot, sent } = setup(state({ offers: [full], controls: { home: 1, view2: 12, collectAll: 5 } }));
+    sdk.waitForCondition = (async (predicate: any) => {
+        const id = sent.at(-1);
+        const ge = world.ge as GEState;
+        const next = { ...ge, revision: ge.revision + 1, actionRevision: ge.actionRevision + 1 };
+        if (id === 1) Object.assign(next, { screen: 'home', input: null });
+        else if (id === 12) Object.assign(next, { screen: 'offer', selectedOffer: 7, controls: { home: 1, ...controls } });
+        else Object.assign(next, { receipt: { token: 50, kind: 'collect', offerId: 7, items: full.items, coins: full.coins } });
+        world.ge = next;
+        if (!predicate(world)) throw new Error('timeout');
+        return world;
+    }) as any;
+    return { bot, sent };
+}
+
+test('collecting only coins with notes=true uses whichever collect control the offer screen has', async () => {
+    const { bot, sent } = offerScreen({ collect: 20 }, { items: 0, coins: 143 });
+    const result = await bot.collectGEOffer(7, true);
+    expect(result.success).toBe(true);
+    expect(result.coins).toBe(143);
+    expect(sent).toEqual([1, 12, 20]);
+});
+
+test('items due as notes still need the notes control: no silent switch to unnoted items', async () => {
+    const noted = offerScreen({ collect: 20, collectNotes: 21 }, { side: 'buy', items: 3, coins: 0 });
+    expect((await noted.bot.collectGEOffer(7, true)).success).toBe(true);
+    expect(noted.sent).toEqual([1, 12, 21]);
+    const missing = offerScreen({ collect: 20 }, { side: 'buy', items: 3, coins: 0 });
+    const result = await missing.bot.collectGEOffer(7, true);
+    expect(result.success).toBe(false);
+    expect(result.reason).toBe('no_control');
+    expect(missing.sent).toEqual([1, 12]);
+});
