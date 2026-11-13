@@ -242,6 +242,80 @@ describe('effect-paced ops', () => {
         expect(h.world.inventory.length).toBe(0);
     });
 
+    describe('pipelined (periodTicks)', () => {
+        // The server takes the next bury 2 ticks after the last.
+        const bury2 = (w: World, it: InventoryItem, op: number) => { if (op !== 1) return false; removeOne(w, it); w.xp.Prayer! += 375; w.delayedUntil = w.tick + 2; return true; };
+        const world = (n: number): World => ({ tick: 100, inventory: bones(n), xp: { Prayer: 0 }, rejected: 0, delayedUntil: 0, dialog: { isOpen: false, options: [] } });
+        const record = (h: ReturnType<typeof harness>) => {
+            const log: { tick: number; slot: number }[] = [];
+            const send = h.sdk.sendUseItem.bind(h.sdk);
+            h.sdk.sendUseItem = async (slot: number, op?: number) => { log.push({ tick: (h.sdk as any).state.tick, slot }); return send(slot, op); };
+            return log;
+        };
+
+        test('sends every 2nd frame to a fresh slot and drops nothing', async () => {
+            const h = harness(world(12), { use: bury2 });
+            const log = record(h);
+            const r = await h.bot.useInventoryItems(/^big bones$/i, 'Bury', { periodTicks: 2 }) as PacedResult;
+            expect(r).toMatchObject({ success: true, done: 12, sent: 12, dropped: 0, xpGained: 12 * 375, cooldownTicks: 0 });
+            expect(h.world.rejected).toBe(0);
+            expect(new Set(log.map(l => l.slot)).size).toBe(12);
+            for (let i = 1; i < log.length; i++) expect(log[i]!.tick - log[i - 1]!.tick).toBe(2);
+            // One bone per 2 ticks plus the effect lag, not 3 per bone.
+            expect(r.ticks).toBeLessThanOrEqual(12 * 2 + 4);
+        });
+
+        test('respects max and counts by effect', async () => {
+            const h = harness(world(10), { use: bury2 });
+            const r = await h.bot.useInventoryItems(/^big bones$/i, 'Bury', { periodTicks: 2, max: 4 }) as PacedResult;
+            expect(r).toMatchObject({ done: 4, sent: 4 });
+            expect(h.world.inventory.length).toBe(6);
+        });
+
+        test('a dropped send is retried only after the slot stays unchanged for a few frames', async () => {
+            let swallowed = false;
+            const h = harness(world(3), {
+                use: (w, it, op) => { if (it.slot === 0 && !swallowed) { swallowed = true; return 'reject'; } return bury2(w, it, op); },
+            });
+            const log = record(h);
+            const r = await h.bot.useInventoryItems(/^big bones$/i, 'Bury', { periodTicks: 2 }) as PacedResult;
+            expect(r).toMatchObject({ success: true, done: 3, dropped: 1, sent: 4 });
+            const slot0 = log.filter(l => l.slot === 0);
+            expect(slot0.length).toBe(2);
+            expect(slot0[1]!.tick - slot0[0]!.tick).toBeGreaterThanOrEqual(5);
+            expect(h.world.inventory.length).toBe(0);
+        });
+
+        test('a send the client refuses (slot already empty) goes to the next slot in the same frame', async () => {
+            const h = harness(world(4), { use: bury2 });
+            const inner = h.sdk.sendUseItem.bind(h.sdk);
+            let refused = false;
+            h.sdk.sendUseItem = async (slot: number, op?: number) => {
+                if (!refused && slot === 1) { refused = true; return { success: false, message: 'slot empty' }; }
+                return inner(slot, op);
+            };
+            const r = await h.bot.useInventoryItems(/^big bones$/i, 'Bury', { periodTicks: 2 }) as PacedResult;
+            expect(r).toMatchObject({ success: true, done: 4, sent: 4 });
+            expect(h.world.inventory.length).toBe(0);
+        });
+
+        test('gives up when nothing ever takes effect', async () => {
+            const h = harness(world(3), { use: () => 'reject' });
+            const r = await h.bot.useInventoryItems(/^big bones$/i, 'Bury', { periodTicks: 2 }) as PacedResult;
+            expect(r).toMatchObject({ success: false, done: 0, reason: 'no_effect' });
+        });
+
+        test('without periodTicks the effect-paced mode is unchanged', async () => {
+            const h = harness(world(4), { use: bury2 });
+            const log = record(h);
+            const r = await h.bot.useInventoryItems(/^big bones$/i, 'Bury') as PacedResult;
+            expect(r.done).toBe(4);
+            // One send per effect: a later send never goes out before the last one showed.
+            expect(log.length).toBe(r.sent);
+            expect(r.cooldownTicks).toBeGreaterThanOrEqual(0);
+        });
+    });
+
     test('an option the item lacks fails without sending', async () => {
         const h = harness({ tick: 100, inventory: bones(2), xp: { Prayer: 0 }, rejected: 0, delayedUntil: 0, dialog: { isOpen: false, options: [] } }, { use: bury });
         const r = await h.bot.useInventoryItems(/^big bones$/i, 'Eat') as PacedResult;
