@@ -141,6 +141,11 @@ export function levelsOf(state: BotWorldState | null | undefined): number {
     return state?.skills.reduce((n, s) => n + (s.baseLevel ?? s.level ?? 0), 0) ?? 0;
 }
 
+/** Frames a pipelined send may stay unchanged before it counts as dropped and its slot is sent again. */
+const PIPELINE_RETRY_FRAMES = 5;
+/** Frames with sends outstanding and no effect before a pipelined run gives up. */
+const PIPELINE_STALL_FRAMES = 9;
+
 /** Clean effects in a row before a paced op tries one tick less cooldown. */
 export const COOLDOWN_DECAY_AFTER = 6;
 
@@ -475,7 +480,7 @@ export class ProcessingActions {
     // ---------- S4: an inventory option on every match ----------
 
     async useInventoryItems(target: ItemTarget, option: string | RegExp | number, options: {
-        max?: number; perTick?: number; cooldownTicks?: number; timeoutTicks?: number;
+        max?: number; perTick?: number; cooldownTicks?: number; timeoutTicks?: number; periodTicks?: number;
     } = {}): Promise<BurstResult | PacedResult> {
         const opIndexOf = (item: InventoryItem): number | null => {
             if (typeof option === 'number') return option;
@@ -501,6 +506,16 @@ export class ProcessingActions {
                 }),
             });
         }
+        if (options.periodTicks !== undefined) {
+            return this.pipelinedUse({
+                label: 'useInventoryItems',
+                times: max,
+                periodTicks: options.periodTicks,
+                timeoutTicks: options.timeoutTicks,
+                candidates: state => matchInventory(state.inventory, target),
+                opIndexOf,
+            });
+        }
         return this.paced({
             label: 'useInventoryItems',
             times: max,
@@ -512,6 +527,90 @@ export class ProcessingActions {
                 return item && op !== null ? () => this.sdk.sendUseItem(item.slot, op) : null;
             },
         });
+    }
+
+    /**
+     * An inventory op with a delay, sent on a fixed rhythm instead of one at a time. The server takes the next op
+     * `periodTicks` after the last; the client is a frame behind and drops an op aimed at a slot that was just emptied,
+     * so waiting for each effect before the next send costs an extra tick. Here a send goes out every `periodTicks`
+     * frames to a matching slot not yet sent, and a slot is not sent again until its item has left. Successes are
+     * counted by that effect (the item gone or its count down), not by sends. A slot whose item is still there
+     * `PIPELINE_RETRY_FRAMES` frames after its send was dropped and is released to be sent again. Stops after
+     * `PIPELINE_STALL_FRAMES` frames with sends outstanding and no effect.
+     */
+    private async pipelinedUse(opts: {
+        label: string;
+        times: number;
+        periodTicks: number;
+        timeoutTicks?: number;
+        candidates: (state: BotWorldState) => InventoryItem[];
+        opIndexOf: (item: InventoryItem) => number | null;
+    }): Promise<PacedResult> {
+        const fail = (message: string, reason: NonNullable<PacedResult['reason']>): PacedResult =>
+            ({ success: false, message, done: 0, sent: 0, dropped: 0, ticks: 0, xpGained: 0, cooldownTicks: 0, reason });
+        const start = this.state();
+        if (!start) return fail('No game state', 'timeout');
+        if (start.bank?.isOpen || start.shop?.isOpen || start.trade?.isOpen) {
+            return fail('A bank, shop or trade interface is open and hides the inventory from the server: close it first', 'modal_open');
+        }
+        const period = Math.max(1, Math.floor(opts.periodTicks));
+        const deadline = start.tick + (opts.timeoutTicks ?? opts.times * (period + 1) + 20);
+        // slot -> the item and count it held when sent, and the frame it was sent on.
+        const held = new Map<number, { id: number; count: number; at: number }>();
+        let done = 0, sent = 0, dropped = 0, lastSend = -Infinity, lastProgress = start.tick;
+        let reason: PacedResult['reason'];
+        let state: BotWorldState = start;
+
+        for (;;) {
+            // Effects first: a held slot whose item left (or whose stack shrank) is a success.
+            for (const [slot, h] of held) {
+                const now = state.inventory.find(i => i.slot === slot);
+                if (!now || now.id !== h.id || now.count < h.count) { held.delete(slot); done++; lastProgress = state.tick; }
+                else if (state.tick - h.at >= PIPELINE_RETRY_FRAMES) { held.delete(slot); dropped++; }
+            }
+            if (done >= opts.times) break;
+            if (state.tick >= deadline) { reason = 'timeout'; break; }
+            if (hasProductDialog(state)) { reason = 'dialog_opened'; break; }
+            if (state.dialog?.isOpen) {
+                // A level-up box swallows ops: close it. Slots in flight stay held: they count when their item leaves, or
+                // go back to the pool after the retry window.
+                await this.bot.dismissBlockingUI();
+                state = (await this.frameAfter(state.tick)) ?? this.state() ?? state;
+                lastSend = -Infinity;
+                lastProgress = state.tick;
+                continue;
+            }
+            const fresh = opts.candidates(state).filter(i => !held.has(i.slot) && opts.opIndexOf(i) !== null);
+            if (fresh.length === 0 && held.size === 0) { reason = 'out_of_items'; break; }
+            if (held.size > 0 && state.tick - lastProgress >= PIPELINE_STALL_FRAMES && sent > 0) { reason = 'no_effect'; break; }
+            if (fresh.length > 0 && done + held.size < opts.times && state.tick - lastSend >= period) {
+                // The client refuses a send to a slot it already sees empty (its inventory is a frame ahead of this
+                // state): try the next slot in the same frame rather than losing the beat.
+                for (const slot of fresh.slice(0, 3)) {
+                    const result = await this.sdk.sendUseItem(slot.slot, opts.opIndexOf(slot)!);
+                    if (!result.success) {
+                        if (result.reason === 'modal_open') reason = 'modal_open';
+                        continue;
+                    }
+                    sent++;
+                    held.set(slot.slot, { id: slot.id, count: slot.count, at: state.tick });
+                    lastSend = state.tick;
+                    if (held.size === 1) lastProgress = Math.max(lastProgress, state.tick);
+                    break;
+                }
+                if (reason) break;
+            }
+            const next = await this.frameAfter(state.tick);
+            if (!next) { reason = 'timeout'; break; }
+            state = next;
+        }
+        const end = this.state() ?? state;
+        const xpGained = totalXp(end) - totalXp(start);
+        return {
+            success: done > 0 && reason !== 'no_effect' && reason !== 'timeout' && reason !== 'modal_open',
+            message: `${opts.label}: ${done} done from ${sent} sends (${dropped} dropped) over ${end.tick - start.tick} ticks, ${xpGained} XP, every ${period} ticks${reason ? ` (${reason})` : ''}`,
+            done, sent, dropped, ticks: end.tick - start.tick, xpGained, cooldownTicks: 0, reason,
+        };
     }
 
     /**

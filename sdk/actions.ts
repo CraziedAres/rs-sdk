@@ -193,19 +193,6 @@ export class BotActions {
     }
 
     /**
-     * Click an inventory option ('Bury', 'Identify', 'Clean', or an op index) on
-     * every matching item, up to `max`. With `perTick` above 1 it bursts like
-     * useItemOnItem (no-delay ops such as identifying herbs). By default it paces
-     * by the effect instead: one send, wait for the XP or inventory change, wait
-     * `cooldownTicks`, send the next. Ops sent while the player is delayed (burying
-     * is one bone per 3 ticks) are dropped silently; each dropped send raises the
-     * cooldown by a tick and goes again, and the result's `cooldownTicks` is the
-     * learned value to pass in next time.
-     * ```ts
-     * const r = await bot.useInventoryItems(/^big bones$/i, 'Bury', { cooldownTicks: 1 });
-     * ```
-     */
-    /**
      * Drop every matching inventory slot, up to 5 a tick (no delay on dropping), each slot checked by its effect frame.
      * `bot.dropItem` drops one slot and waits for it, about 2 ticks a slot; this clears a full bag of logs in about 7.
      * ```ts
@@ -219,10 +206,31 @@ export class BotActions {
         return this.processing.dropItems(target, options);
     }
 
+    /**
+     * Click an inventory option ('Bury', 'Identify', 'Clean', or an op index) on
+     * every matching item, up to `max`. With `perTick` above 1 it bursts like
+     * useItemOnItem (no-delay ops such as identifying herbs). By default it paces
+     * by the effect instead: one send, wait for the XP or inventory change, wait
+     * `cooldownTicks`, send the next. Ops sent while the player is delayed are
+     * dropped silently; each dropped send raises the cooldown by a tick and goes
+     * again, and the result's `cooldownTicks` is the learned value to pass in next
+     * time. Waiting on each effect costs about 3 ticks per bone when burying,
+     * though the server accepts one every 2.
+     *
+     * `periodTicks` sends on a fixed rhythm instead: one use every `periodTicks`
+     * frames, each to a matching slot not yet sent, a slot not sent again until its
+     * item has left (a send is retried only after the slot has stayed unchanged for
+     * a few frames). Successes are counted by the effect, not by sends. Pass the
+     * action's real delay (2 for burying bones).
+     * ```ts
+     * const r = await bot.useInventoryItems(/^big bones$/i, 'Bury', { cooldownTicks: 1 });
+     * const fast = await bot.useInventoryItems(/^big bones$/i, 'Bury', { periodTicks: 2 });
+     * ```
+     */
     async useInventoryItems(
         target: InventoryItem | string | RegExp,
         option: string | RegExp | number,
-        options: { max?: number; perTick?: number; cooldownTicks?: number; timeoutTicks?: number } = {}
+        options: { max?: number; perTick?: number; cooldownTicks?: number; timeoutTicks?: number; periodTicks?: number } = {}
     ): Promise<BurstResult | PacedResult> {
         return this.processing.useInventoryItems(target, option, options);
     }
